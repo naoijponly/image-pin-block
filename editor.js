@@ -358,45 +358,86 @@
 	];
 
 	// Dropdown の中身(ColorPicker本体)。Dropdownが開いている間だけマウントされる。
-	// ColorPicker の color に props.value を直接(＝毎レンダリング)渡すと、
-	// onChange → setAttributes → 再レンダリング → 新しい value が color に戻る、という
-	// 往復により、ドラッグ中に一瞬前の値へ表示が巻き戻るように見える不具合があった
-	// (setAttributesの反映速度に関わらず、ColorPickerが受け取るcolorプロパティが
-	// 毎回「正」として内部状態を作り直すため)。マウント時の値をドラフトとして保持し、
-	// ColorPicker にはこのドラフトを渡すことで、ピッカー自身の表示は自分が最後に
-	// 報告した値のみに追従させる(setAttributes自体は従来通り毎回呼ぶため、
-	// ライブプレビューの反映やドラッグ終了時の確定は遅延しない)。
-	// ドラフトはマウント時にしか初期化しないため、開いたまま元に戻す(Ctrl+Z)等で
-	// 外部から値が変わった場合には追従しないが、Dropdownを閉じて開き直せば
-	// このコンポーネントごと再マウントされ、その時点の最新値で初期化し直される。
+	//
+	// ColorPicker の onChange はドラッグ中(グラデーション/色相バーの操作中)に高頻度で
+	// 発火する。これを毎回 setAttributes に伝えると、ドラッグ1回で undo 履歴が
+	// 100件以上積まれ、Ctrl+Z が実質使えなくなる。そのため setAttributes は
+	// 「ドラッグを離した時点」に1回だけ呼ぶ(pointerup/pointercancelで検知)。
+	// Hex/RGB/HSLのテキスト入力欄はポインタ操作を伴わないため、フォーカスが外れた
+	// とき(blur)またはEnterキーを確定のタイミングとする(ClampedNumberControlと同じ考え方)。
+	//
+	// ColorPicker 自身の color プロパティには、確定済みの値(props.value)だけを渡し、
+	// ドラッグ中は一切変更しない。ColorPicker は内部で自身のドラッグ状態を保持して
+	// 滑らかに追従するため、外側から色を追従させ直す必要はない。
+	// (経緯: @wordpress/components の ColorPicker(react-colorful ベース)は、
+	// 内部の useColorManipulation フックが持つ2つの useEffect が、キャッシュと
+	// hsva ステートの更新タイミングの食い違いにより、外部から色を再注入していなくても
+	// 自己完結した値の往復を起こしうる不具合がある。setAttributes をドラッグ確定時の
+	// 1回に絞ることで、color プロパティ自体がドラッグ中に変化しなくなるため、この
+	// 不具合の発生条件(繰り返しの外部からの色変更)が生じなくなる。詳細は
+	// docs/DATA_LAYOUT.md の「カラーピッカーの往復不具合」参照)
+	//
+	// ドラッグ中の値は onPreview で都度報告し(setAttributesは呼ばない)、
+	// キャンバス上のライブプレビューにのみ反映する。確定時に onCommit を呼ぶ。
 	function ColorPickerField( props ) {
-		var draftState = useState( props.value || '' );
-		var draft = draftState[ 0 ];
-		var setDraft = draftState[ 1 ];
+		// コミットすべき最新値。onChangeのたびに更新するが、再レンダリングは起こさない
+		// (setStateではなくrefにする理由: これ自体はUIに表示する値ではなく、
+		// 確定時に読み出すためだけの値のため)。
+		var latestValueRef = useRef( props.value );
 
 		function handleChange( color ) {
-			setDraft( color );
-			props.onChange( color );
+			latestValueRef.current = color;
+			if ( props.onPreview ) {
+				props.onPreview( color );
+			}
 		}
 
-		return el( ColorPicker, {
-			color: draft || undefined,
-			onChange: handleChange,
-			enableAlpha: !! props.enableAlpha
-		} );
+		function commit() {
+			if ( latestValueRef.current !== props.value && props.onCommit ) {
+				props.onCommit( latestValueRef.current );
+			}
+		}
+
+		return el(
+			'div',
+			{
+				className: 'image-pin-block-editor__color-picker-commit-wrap',
+				onPointerUp: commit,
+				onPointerCancel: commit,
+				onBlur: commit,
+				onKeyDown: function( evt ) {
+					if ( evt.key === 'Enter' ) {
+						commit();
+					}
+				}
+			},
+			el( ColorPicker, {
+				color: props.value || undefined,
+				onChange: handleChange,
+				enableAlpha: !! props.enableAlpha
+			} )
+		);
 	}
 
 	// 色1つ分の設定行: スウォッチボタン(クリックでカラーピッカーをポップオーバー表示)+ラベル。
 	// labelBackgroundColor 等、既存の rgba() 値を保持し得る属性にも対応するため、
 	// (PanelColorSettings ではなく)フルの ColorPicker を Dropdown に包んで使う
 	// (ネイティブの <input type="color"> は hex専用で rgba() を表示できないため不採用)。
-	// スウォッチボタン自体は常に props.value(実際の属性値)を直接参照するため、
-	// Dropdownを開いていない間や、開いていても値が外部から変わった直後でも、
-	// 常に最新の色を表示する。
+	// value は常に確定済みの属性値(committed value)を渡すこと。ドラッグ中のプレビューを
+	// 表示したい場合は、呼び出し側で別途 previewColors を使ってキャンバス側に反映する
+	// (ColorInputRow/ColorPicker自体には、往復不具合を再発させないため反映しない)。
 	// allowEmpty: true の場合、値が空でなければ「リセット」ボタンで空文字に戻せる
 	// (popoverBackgroundColor/popoverTextColor の「未設定=継承」に戻すため)。
 	function ColorInputRow( props ) {
 		var currentColor = props.value || '';
+
+		function handleReset() {
+			props.onCommit( '' );
+			if ( props.onPreviewClear ) {
+				props.onPreviewClear();
+			}
+		}
+
 		return el(
 			'div',
 			{ className: 'image-pin-block-editor__color-row' },
@@ -421,13 +462,19 @@
 				renderContent: function() {
 					return el( ColorPickerField, {
 						value: props.value,
-						onChange: props.onChange,
-						enableAlpha: props.enableAlpha
+						enableAlpha: props.enableAlpha,
+						onPreview: props.onPreview,
+						onCommit: function( color ) {
+							props.onCommit( color );
+							if ( props.onPreviewClear ) {
+								props.onPreviewClear();
+							}
+						}
 					} );
 				}
 			} ),
 			( props.allowEmpty && currentColor )
-				? el( Button, { variant: 'link', onClick: function() { props.onChange( '' ); } }, __( 'Reset', 'image-pin-block' ) )
+				? el( Button, { variant: 'link', onClick: handleReset }, __( 'Reset', 'image-pin-block' ) )
 				: null
 		);
 	}
@@ -512,6 +559,40 @@
 				? attributes.popoverStrokeWidth
 				: DEFAULT_STROKE_WIDTH
 		};
+
+		// ドラッグ中のカラーピッカーのライブプレビュー値。setAttributesはドラッグ確定時
+		// (ColorPickerField参照)にしか呼ばないため、キャンバス上の表示(ラベル・
+		// ポップオーバープレビュー)をドラッグに追従させるには、この一時的な値を使う。
+		// キー: labelBackgroundColor/labelTextColor/labelStrokeColor/
+		// popoverBackgroundColor/popoverTextColor/popoverStrokeColor。
+		// ColorInputRowのスウォッチ・ColorPicker自体のcolorプロパティには使わない
+		// (往復不具合の再発を避けるため。詳細はColorPickerField付近のコメント参照)。
+		var previewColorsState = useState( {} );
+		var previewColors = previewColorsState[ 0 ];
+		var setPreviewColors = previewColorsState[ 1 ];
+
+		function setColorPreview( key, color ) {
+			setPreviewColors( function( prev ) {
+				var next = Object.assign( {}, prev );
+				next[ key ] = color;
+				return next;
+			} );
+		}
+
+		function clearColorPreview( key ) {
+			setPreviewColors( function( prev ) {
+				if ( ! ( key in prev ) ) {
+					return prev;
+				}
+				var next = Object.assign( {}, prev );
+				delete next[ key ];
+				return next;
+			} );
+		}
+
+		function resolveColorPreview( key, committedValue ) {
+			return ( key in previewColors ) ? previewColors[ key ] : committedValue;
+		}
 
 		var selectedState = useState( null );
 		var selectedPinId = selectedState[ 0 ];
@@ -1044,7 +1125,9 @@
 					// 既定値が rgba() のため、ピッカー自体でもアルファを編集できるようにする
 					// (背景の不透明度スライダーとは別に、色そのものに透明度を持たせたい場合のため)。
 					enableAlpha: true,
-					onChange: function( color ) { setAttributes( { labelBackgroundColor: color || DEFAULT_LABEL_BG_COLOR } ); }
+					onPreview: function( color ) { setColorPreview( 'labelBackgroundColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'labelBackgroundColor' ); },
+					onCommit: function( color ) { setAttributes( { labelBackgroundColor: color || DEFAULT_LABEL_BG_COLOR } ); }
 				} ),
 				el( RangeControl, {
 					label: __( 'Label background opacity', 'image-pin-block' ),
@@ -1058,12 +1141,16 @@
 				el( ColorInputRow, {
 					label: __( 'Label text color', 'image-pin-block' ),
 					value: displaySettings.labelTextColor,
-					onChange: function( color ) { setAttributes( { labelTextColor: color || DEFAULT_LABEL_TEXT_COLOR } ); }
+					onPreview: function( color ) { setColorPreview( 'labelTextColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'labelTextColor' ); },
+					onCommit: function( color ) { setAttributes( { labelTextColor: color || DEFAULT_LABEL_TEXT_COLOR } ); }
 				} ),
 				el( ColorInputRow, {
 					label: __( 'Label stroke color', 'image-pin-block' ),
 					value: displaySettings.labelStrokeColor,
-					onChange: function( color ) { setAttributes( { labelStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
+					onPreview: function( color ) { setColorPreview( 'labelStrokeColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'labelStrokeColor' ); },
+					onCommit: function( color ) { setAttributes( { labelStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
 				} ),
 				el( SelectControl, {
 					label: __( 'Label stroke width', 'image-pin-block' ),
@@ -1079,7 +1166,9 @@
 					label: __( 'Popover background color', 'image-pin-block' ),
 					value: popoverSettings.backgroundColor,
 					allowEmpty: true,
-					onChange: function( color ) { setAttributes( { popoverBackgroundColor: color || '' } ); }
+					onPreview: function( color ) { setColorPreview( 'popoverBackgroundColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'popoverBackgroundColor' ); },
+					onCommit: function( color ) { setAttributes( { popoverBackgroundColor: color || '' } ); }
 				} ),
 				el( RangeControl, {
 					label: __( 'Popover background opacity', 'image-pin-block' ),
@@ -1094,12 +1183,16 @@
 					label: __( 'Popover text color', 'image-pin-block' ),
 					value: popoverSettings.textColor,
 					allowEmpty: true,
-					onChange: function( color ) { setAttributes( { popoverTextColor: color || '' } ); }
+					onPreview: function( color ) { setColorPreview( 'popoverTextColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'popoverTextColor' ); },
+					onCommit: function( color ) { setAttributes( { popoverTextColor: color || '' } ); }
 				} ),
 				el( ColorInputRow, {
 					label: __( 'Popover stroke color', 'image-pin-block' ),
 					value: popoverSettings.strokeColor,
-					onChange: function( color ) { setAttributes( { popoverStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
+					onPreview: function( color ) { setColorPreview( 'popoverStrokeColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'popoverStrokeColor' ); },
+					onCommit: function( color ) { setAttributes( { popoverStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
 				} ),
 				el( SelectControl, {
 					label: __( 'Popover stroke width', 'image-pin-block' ),
@@ -1242,6 +1335,21 @@
 			);
 		}
 
+		// キャンバス表示(ピンのラベル・ポップオーバープレビュー)専用の見た目設定。
+		// ドラッグ中はライブプレビュー値を、それ以外は確定済みの値を使う。
+		// displaySettings/popoverSettings 自体(ColorInputRowのスウォッチ・
+		// ColorPicker自体のcolorプロパティに使われる)には、このプレビュー値を混ぜない。
+		var canvasDisplaySettings = Object.assign( {}, displaySettings, {
+			labelBackgroundColor: resolveColorPreview( 'labelBackgroundColor', displaySettings.labelBackgroundColor ),
+			labelTextColor: resolveColorPreview( 'labelTextColor', displaySettings.labelTextColor ),
+			labelStrokeColor: resolveColorPreview( 'labelStrokeColor', displaySettings.labelStrokeColor )
+		} );
+		var canvasPopoverSettings = Object.assign( {}, popoverSettings, {
+			backgroundColor: resolveColorPreview( 'popoverBackgroundColor', popoverSettings.backgroundColor ),
+			textColor: resolveColorPreview( 'popoverTextColor', popoverSettings.textColor ),
+			strokeColor: resolveColorPreview( 'popoverStrokeColor', popoverSettings.strokeColor )
+		} );
+
 		var pinElements = pins.map( function( pin ) {
 			var isSelected = pin.id === selectedPinId;
 			return el(
@@ -1256,7 +1364,7 @@
 					onPointerDown: function( evt ) { handlePinPointerDown( pin.id, evt ); },
 					onClick: function( evt ) { handlePinClick( pin.id, evt ); }
 				},
-				buildPinContent( pin, displaySettings, isSelected )
+				buildPinContent( pin, canvasDisplaySettings, isSelected )
 			);
 		} );
 
@@ -1280,7 +1388,7 @@
 		// 選択中のピンのポップオーバーを、現在の「ポップオーバー」設定を反映した状態で
 		// 実画像の上に表示する(CanvasPopoverPreview 参照)。
 		var canvasPopoverElement = selectedPin
-			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: popoverSettings } )
+			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: canvasPopoverSettings } )
 			: null;
 
 		return el(
