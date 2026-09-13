@@ -301,16 +301,22 @@
 			return children;
 		}
 
-		var dotLabelText = hasLabelText ? pin.label : __( 'Pin', 'image-pin-block' );
 		var dotStyle = {
 			width: ( display.pinSize * ratio ) + 'px',
 			height: ( display.pinSize * ratio ) + 'px',
 			backgroundColor: display.pinColor
 		};
-		return [
-			el( 'span', { key: 'dot', className: 'image-pin-block-editor__pin-dot', style: dotStyle, 'aria-hidden': 'true' } ),
-			el( 'span', { key: 'label', className: 'image-pin-block-editor__pin-label', style: labelStyle }, dotLabelText )
+		var dotChildren = [
+			el( 'span', { key: 'dot', className: 'image-pin-block-editor__pin-dot', style: dotStyle, 'aria-hidden': 'true' } )
 		];
+		// ラベル未入力のときは代替文字を画面に出さず、ドットだけを表示する
+		// (画像マーカーと同じ扱いに揃えている。詳細は上のコメント参照)。
+		if ( hasLabelText ) {
+			dotChildren.push(
+				el( 'span', { key: 'label', className: 'image-pin-block-editor__pin-label', style: labelStyle }, pin.label )
+			);
+		}
+		return dotChildren;
 	}
 
 	// 数値入力欄: 入力中はバリデーションしない下書き状態を保持し、blur/Enterで確定する。
@@ -493,9 +499,22 @@
 	function CanvasPopoverPreview( props ) {
 		var pin = props.pin;
 		var s = props.popoverSettings;
+		var hasLabelText = !! ( pin.label && '' !== pin.label );
+		var hasDescriptionText = !! ( pin.description && '' !== pin.description );
+
+		// ラベル・説明文がどちらも空のピンは、フロント側(image-pin-block.php)が
+		// ポップオーバーの<template>自体を出力しないのと同じ扱いで、プレビューも
+		// 何も表示しない。
+		if ( ! hasLabelText && ! hasDescriptionText ) {
+			return null;
+		}
+
 		var hasMarker = !! pin.markerImageUrl;
-		var showLabel = hasMarker ? ( pin.showLabel !== false && !! pin.label ) : true;
-		var labelText = pin.label || __( 'Pin', 'image-pin-block' );
+		// ラベル未入力時は代替文字("Pin")を補わない。画像マーカーはこの扱いを既に
+		// していたが、丸マーカーも同じ扱いに揃える(image-pin-block.phpのshowLabel/
+		// $show_desc_labelと同じ考え方)。
+		var showLabel = hasMarker ? ( pin.showLabel !== false && hasLabelText ) : hasLabelText;
+		var labelText = pin.label || '';
 
 		var bgBase = s.backgroundColor || DEFAULT_POPOVER_BG_BASE;
 		var boxStyle = Object.assign(

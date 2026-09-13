@@ -341,8 +341,9 @@ function image_pin_block_render_callback( $attributes, $content ) {
 				$y_val       = max( 0, min( 100, $y_val ) );
 				$y           = number_format( $y_val, 1, '.', '' );
 				$raw_label   = isset( $pin['label'] ) ? (string) $pin['label'] : '';
-				// aria-label は常に代替文字で補う(スクリーンリーダー等のため)。
-				// 画面上の可視ラベルは $raw_label をそのまま使い、未入力なら表示しない。
+				// aria-label は常に代替文字で補う(スクリーンリーダー等のため)。画面上の可視ラベルは
+				// $raw_label をそのまま使い、未入力なら表示しない(丸マーカーも画像マーカーと
+				// 同じ扱いに揃えている。以前は丸マーカーのみ未入力時に代替文字を表示していた)。
 				$label       = '' !== $raw_label ? $raw_label : __( 'Pin', 'image-pin-block' );
 				$target      = isset( $pin['target'] ) ? sanitize_html_class( $pin['target'] ) : '';
 				$marker_url  = isset( $pin['markerImageUrl'] ) && '' !== $pin['markerImageUrl'] ? esc_url_raw( $pin['markerImageUrl'] ) : '';
@@ -380,7 +381,9 @@ function image_pin_block_render_callback( $attributes, $content ) {
 						<?php endif; ?>
 					<?php else : ?>
 						<span class="image-pin-block__pin-dot" style="width:<?php echo esc_attr( $pin_size ); ?>px;height:<?php echo esc_attr( $pin_size ); ?>px;background-color:<?php echo esc_attr( $pin_color ); ?>;" data-pin-size="<?php echo esc_attr( $pin_size ); ?>" aria-hidden="true"></span>
-						<span class="image-pin-block__pin-label" style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;font-size:<?php echo esc_attr( $label_font_size ); ?>px;"><?php echo esc_html( $label ); ?></span>
+						<?php if ( '' !== $raw_label ) : ?>
+							<span class="image-pin-block__pin-label" style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;font-size:<?php echo esc_attr( $label_font_size ); ?>px;"><?php echo esc_html( $raw_label ); ?></span>
+						<?php endif; ?>
 					<?php endif; ?>
 				</button>
 			<?php endforeach; ?>
@@ -395,22 +398,27 @@ function image_pin_block_render_callback( $attributes, $content ) {
 				}
 				$pin_id      = sanitize_html_class( $pin['id'] );
 				$raw_label   = isset( $pin['label'] ) ? (string) $pin['label'] : '';
+				$description = isset( $pin['description'] ) ? (string) $pin['description'] : '';
 				// マーカー画像を持つピンは、丸マーカー用の $show_marker_label(上記ループ参照)と
 				// 同じ条件でのみラベルを表示する。「ラベルを表示する」を外している、または
 				// ラベル未入力の場合は、代替文字("Pin")も含めて一切表示しない
 				// (画像の下のラベルだけ非表示で、ポップオーバー内には出る、という不整合を防ぐ)。
-				// 丸マーカーは showLabel を持たないため、常に表示する(未入力なら代替文字)。
+				// 丸マーカーは showLabel を持たないため、ラベルが空でなければ常に表示する
+				// (未入力時は代替文字を補わず、画像上の可視ラベルと同じ扱いにする)。
 				$has_marker_for_desc = isset( $pin['markerImageUrl'] ) && '' !== (string) $pin['markerImageUrl'];
 				$show_desc_label = $has_marker_for_desc
 					? ( ( ! isset( $pin['showLabel'] ) || (bool) $pin['showLabel'] ) && '' !== $raw_label )
-					: true;
-				$label       = '' !== $raw_label ? $raw_label : __( 'Pin', 'image-pin-block' );
-				$description = isset( $pin['description'] ) ? (string) $pin['description'] : '';
+					: ( '' !== $raw_label );
+				// ラベル・説明文がどちらも空のピンは、ポップオーバーに表示するものが無いため
+				// <template> 自体を出力しない。view.js の cloneTemplateContent() は該当する
+				// <template> が無ければ null を返し、呼び出し側(openPopoverForPin 等)は
+				// 何もしないガードを既に持っているため、JS側の変更は不要。
 				$target      = isset( $pin['target'] ) ? sanitize_html_class( $pin['target'] ) : '';
 				?>
+				<?php if ( '' !== $raw_label || '' !== $description ) : ?>
 				<template class="image-pin-block__tpl-pc" data-pin-id="<?php echo esc_attr( $pin_id ); ?>">
 					<?php if ( $show_desc_label ) : ?>
-						<div class="image-pin-block__desc-label"><?php echo esc_html( $label ); ?></div>
+						<div class="image-pin-block__desc-label"><?php echo esc_html( $raw_label ); ?></div>
 					<?php endif; ?>
 					<div class="image-pin-block__desc-body">
 						<?php if ( $pc_needs_link && '' !== $target ) : ?>
@@ -420,6 +428,7 @@ function image_pin_block_render_callback( $attributes, $content ) {
 						<?php endif; ?>
 					</div>
 				</template>
+				<?php endif; ?>
 			<?php endforeach; ?>
 		</div>
 
@@ -433,18 +442,19 @@ function image_pin_block_render_callback( $attributes, $content ) {
 			}
 			$pin_id      = sanitize_html_class( $pin['id'] );
 			$raw_label   = isset( $pin['label'] ) ? (string) $pin['label'] : '';
-			// PC用テンプレートと同じ理由で、マーカー画像ピンの showLabel/未入力を反映する。
+			$description = isset( $pin['description'] ) ? (string) $pin['description'] : '';
+			// PC用テンプレートと同じ理由で、マーカー画像ピンの showLabel/未入力、丸マーカーの
+			// 未入力時の扱いを反映する。
 			$has_marker_for_desc = isset( $pin['markerImageUrl'] ) && '' !== (string) $pin['markerImageUrl'];
 			$show_desc_label = $has_marker_for_desc
 				? ( ( ! isset( $pin['showLabel'] ) || (bool) $pin['showLabel'] ) && '' !== $raw_label )
-				: true;
-			$label       = '' !== $raw_label ? $raw_label : __( 'Pin', 'image-pin-block' );
-			$description = isset( $pin['description'] ) ? (string) $pin['description'] : '';
+				: ( '' !== $raw_label );
 			$target      = isset( $pin['target'] ) ? sanitize_html_class( $pin['target'] ) : '';
 			?>
+			<?php if ( '' !== $raw_label || '' !== $description ) : ?>
 			<template class="image-pin-block__tpl-mobile" data-pin-id="<?php echo esc_attr( $pin_id ); ?>">
 				<?php if ( $show_desc_label ) : ?>
-					<div class="image-pin-block__desc-label"><?php echo esc_html( $label ); ?></div>
+					<div class="image-pin-block__desc-label"><?php echo esc_html( $raw_label ); ?></div>
 				<?php endif; ?>
 				<div class="image-pin-block__desc-body">
 					<?php if ( $mobile_needs_link && '' !== $target ) : ?>
@@ -454,6 +464,7 @@ function image_pin_block_render_callback( $attributes, $content ) {
 					<?php endif; ?>
 				</div>
 			</template>
+			<?php endif; ?>
 		<?php endforeach; ?>
 	</div>
 	<?php
