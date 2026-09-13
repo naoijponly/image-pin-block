@@ -121,18 +121,31 @@
 			return;
 		}
 
-		// 基準倍率 = 元画像の実サイズ ÷ 現在ページ上での表示サイズ(拡大表示を開いた時点の倍率)。
-		// 元画像より縮小した状態では開かない。
+		// naturalRatio = 元画像の実サイズ ÷ 現在ページ上での表示サイズ。
+		// これを拡大率の「上限」の基準にする(＝元画像の解像度を超えて拡大しない。
+		// それ以上はただの引き伸ばしでぼやけるだけのため)。
 		var naturalWidth = imgEl.naturalWidth || displayedRect.width;
-		var baseRatio = naturalWidth / displayedRect.width;
-		if ( ! isFinite( baseRatio ) || baseRatio < 1 ) {
-			baseRatio = 1;
+		var naturalRatio = naturalWidth / displayedRect.width;
+		if ( ! isFinite( naturalRatio ) || naturalRatio <= 0 ) {
+			naturalRatio = 1;
 		}
 
-		// 倍率の下限・上限。下限はページ上の表示サイズ(等倍)、上限は元画像の数倍まで。
-		var MIN_RATIO = 1;
-		var MAX_RATIO = baseRatio * 4;
-		var ratio = baseRatio;
+		// fitRatio = 画像全体がビューポートに収まる倍率(fit-to-screen)。
+		// 開いた直後はこの倍率にし、これを拡大率の「下限」にもする
+		// (これより縮小すると画像が画面より小さくなってしまうため)。
+		// PC・スマホともに同じ考え方で統一する。
+		var fitRatio = Math.min( window.innerWidth / displayedRect.width, window.innerHeight / displayedRect.height );
+		if ( ! isFinite( fitRatio ) || fitRatio <= 0 ) {
+			fitRatio = 1;
+		}
+
+		// 倍率の下限・上限。
+		// 下限: fit-to-screen(常にこれより縮小できない)。
+		// 上限: 元画像の解像度(naturalRatio)。ただし、元画像が既に画面より小さく
+		// fitRatioの方が大きくなる場合は、下限=上限=fitRatioにする(矛盾を避ける)。
+		var MIN_RATIO = fitRatio;
+		var MAX_RATIO = Math.max( naturalRatio, fitRatio );
+		var ratio = fitRatio;
 
 		var overlay = document.createElement( 'div' );
 		overlay.className = 'image-pin-block__zoom-overlay';
