@@ -357,10 +357,42 @@
 		{ value: 'thick', label: __( 'Thick', 'image-pin-block' ) }
 	];
 
+	// Dropdown の中身(ColorPicker本体)。Dropdownが開いている間だけマウントされる。
+	// ColorPicker の color に props.value を直接(＝毎レンダリング)渡すと、
+	// onChange → setAttributes → 再レンダリング → 新しい value が color に戻る、という
+	// 往復により、ドラッグ中に一瞬前の値へ表示が巻き戻るように見える不具合があった
+	// (setAttributesの反映速度に関わらず、ColorPickerが受け取るcolorプロパティが
+	// 毎回「正」として内部状態を作り直すため)。マウント時の値をドラフトとして保持し、
+	// ColorPicker にはこのドラフトを渡すことで、ピッカー自身の表示は自分が最後に
+	// 報告した値のみに追従させる(setAttributes自体は従来通り毎回呼ぶため、
+	// ライブプレビューの反映やドラッグ終了時の確定は遅延しない)。
+	// ドラフトはマウント時にしか初期化しないため、開いたまま元に戻す(Ctrl+Z)等で
+	// 外部から値が変わった場合には追従しないが、Dropdownを閉じて開き直せば
+	// このコンポーネントごと再マウントされ、その時点の最新値で初期化し直される。
+	function ColorPickerField( props ) {
+		var draftState = useState( props.value || '' );
+		var draft = draftState[ 0 ];
+		var setDraft = draftState[ 1 ];
+
+		function handleChange( color ) {
+			setDraft( color );
+			props.onChange( color );
+		}
+
+		return el( ColorPicker, {
+			color: draft || undefined,
+			onChange: handleChange,
+			enableAlpha: !! props.enableAlpha
+		} );
+	}
+
 	// 色1つ分の設定行: スウォッチボタン(クリックでカラーピッカーをポップオーバー表示)+ラベル。
 	// labelBackgroundColor 等、既存の rgba() 値を保持し得る属性にも対応するため、
 	// (PanelColorSettings ではなく)フルの ColorPicker を Dropdown に包んで使う
 	// (ネイティブの <input type="color"> は hex専用で rgba() を表示できないため不採用)。
+	// スウォッチボタン自体は常に props.value(実際の属性値)を直接参照するため、
+	// Dropdownを開いていない間や、開いていても値が外部から変わった直後でも、
+	// 常に最新の色を表示する。
 	// allowEmpty: true の場合、値が空でなければ「リセット」ボタンで空文字に戻せる
 	// (popoverBackgroundColor/popoverTextColor の「未設定=継承」に戻すため)。
 	function ColorInputRow( props ) {
@@ -387,10 +419,10 @@
 					);
 				},
 				renderContent: function() {
-					return el( ColorPicker, {
-						color: currentColor || undefined,
-						onChange: function( color ) { props.onChange( color ); },
-						enableAlpha: !! props.enableAlpha
+					return el( ColorPickerField, {
+						value: props.value,
+						onChange: props.onChange,
+						enableAlpha: props.enableAlpha
 					} );
 				}
 			} ),
