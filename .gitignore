@@ -1,0 +1,20 @@
+# 開発用資料(Claude Code向けの作業規則、開発メモ)。配布物には不要なためGit管理外にする
+CLAUDE.md
+docs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# エディタ / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 配布用ZIP(手元でビルドしたものはコミットしない。docs/TASKS.md参照)
+*.zip
+
+# ログ・一時ファイル
+*.log

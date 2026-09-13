@@ -1,0 +1,22 @@
+{
+	"apiVersion": 3,
+	"name": "image-pin-block/pins",
+	"title": "Image Pin Block",
+	"category": "media",
+	"icon": "location-alt",
+	"description": "A block that places pins on an image to show descriptions and jump to other parts of the page.",
+	"textdomain": "image-pin-block",
+	"attributes": {
+		"imageId": { "type": "number", "default": 0 },
+		"imageUrl": { "type": "string", "default": "" },
+		"imageWidth": { "type": "number", "default": 0 },
+		"imageHeight": { "type": "number", "default": 0 },
+		"pcBehavior": { "type": "string", "default": "hover-click" },
+		"mobileBehavior": { "type": "string", "default": "tap-tap" },
+		"pinSize": { "type": "number", "default": 24 },
+		"pinColor": { "type": "string", "default": "#e63946" },
+		"labelBackgroundColor": { "type": "string", "default": "rgba(255,255,255,0.9)" },
+		"labelTextColor": { "type": "string", "default": "#1e1e1e" },
+		"pins": { "type": "array", "default": [] }
+	}
+}

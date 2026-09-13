@@ -1,0 +1,117 @@
+{
+	"translation-revision-date": "2026-09-12 00:00:00+0000",
+	"generator": "manual",
+	"source": "editor.js",
+	"domain": "image-pin-block",
+	"locale_data": {
+		"image-pin-block": {
+			"": {
+				"domain": "image-pin-block",
+				"lang": "ja",
+				"plural-forms": "nplurals=1; plural=0;"
+			},
+			"A block that places pins on an image to show descriptions and jump to other parts of the page.": [
+				"画像上にピンを配置し、説明の表示とページ内リンクへの移動ができるブロック。"
+			],
+			"(Untitled heading)": [
+				"(無題の見出し)"
+			],
+			"Pin": [
+				"ピン"
+			],
+			"(None selected)": [
+				"(未選択)"
+			],
+			"Display settings": [
+				"表示設定"
+			],
+			"Desktop behavior": [
+				"PCでの動作"
+			],
+			"Show description on hover, click to jump": [
+				"ホバーで説明表示／クリックで遷移"
+			],
+			"Show description on click, jump via link in description": [
+				"クリックで説明表示／説明内のリンクで遷移"
+			],
+			"Mobile behavior": [
+				"スマホでの動作"
+			],
+			"Tap to jump immediately": [
+				"タップで即遷移"
+			],
+			"First tap shows description, second tap jumps": [
+				"1回目タップで説明／2回目タップで遷移"
+			],
+			"Show description on tap, jump via link in description": [
+				"タップで説明表示／説明内のリンクで遷移"
+			],
+			"Pin size (px, round marker only)": [
+				"ピンのサイズ(px、丸マーカーのみ)"
+			],
+			"Pin color": [
+				"ピンの色"
+			],
+			"Pin color (round marker only)": [
+				"ピンの色(丸マーカーのみ)"
+			],
+			"Label background color": [
+				"ラベルの背景色"
+			],
+			"Label text color": [
+				"ラベルの文字色"
+			],
+			"Pin settings": [
+				"ピン設定"
+			],
+			"Label": [
+				"ラベル"
+			],
+			"Marker image": [
+				"マーカー画像"
+			],
+			"Change marker image": [
+				"マーカー画像を変更"
+			],
+			"Remove marker image": [
+				"マーカー画像を解除"
+			],
+			"Select marker image": [
+				"マーカー画像を選択"
+			],
+			"Marker image scale (%)": [
+				"マーカー画像の拡大率(%)"
+			],
+			"Show label": [
+				"ラベルを表示する"
+			],
+			"Description": [
+				"説明"
+			],
+			"Choose target heading": [
+				"遷移先の見出しから選択"
+			],
+			"Only heading blocks with an HTML anchor set appear as options. If the heading you want isn't listed, set an HTML anchor for it under Advanced settings, or type the anchor name directly in the field below.": [
+				"HTMLアンカーを設定した見出しブロックだけが候補に表示されます。出てこない場合は、見出し側の「高度な設定」でHTMLアンカーを設定するか、下の欄にアンカー名を直接入力してください。"
+			],
+			"Enter target anchor manually": [
+				"遷移先アンカーを直接入力"
+			],
+			"For destinations that don't appear in the dropdown, such as non-heading blocks, enter the anchor name directly. You don't need to include the # symbol.": [
+				"見出し以外など、プルダウンに出てこない飛び先はアンカー名を直接入力してください(# は付けなくても構いません)。"
+			],
+			"Delete this pin": [
+				"このピンを削除"
+			],
+			"Select image": [
+				"画像を選択"
+			],
+			"Add a pin here": [
+				"ここにピンを追加"
+			],
+			"Change image": [
+				"画像を変更"
+			]
+		}
+	}
+}

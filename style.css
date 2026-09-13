@@ -1,0 +1,231 @@
+.image-pin-block {
+	position: relative;
+}
+
+.image-pin-block__wrapper {
+	position: relative;
+	display: block;
+}
+
+.image-pin-block__zoom-btn {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	width: 32px;
+	height: 32px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.55);
+	color: #fff;
+	border: none;
+	border-radius: 4px;
+	padding: 0;
+	cursor: pointer;
+	z-index: 5;
+}
+
+.image-pin-block__zoom-btn:hover,
+.image-pin-block__zoom-btn:focus-visible {
+	background: rgba(0, 0, 0, 0.75);
+}
+
+.image-pin-block__image {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+.image-pin-block__pin {
+	position: absolute;
+	transform: translate(-50%, -50%);
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0;
+	margin: 0;
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	touch-action: manipulation;
+}
+
+/* サイズ・背景色は「表示設定」パネルの値がインラインstyleで指定される(PHP側で必ず設定される)。 */
+.image-pin-block__pin-dot {
+	display: block;
+	flex: 0 0 auto;
+	border-radius: 50%;
+	border: 2px solid #fff;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* pinColor はインラインstyleで指定されるため、hover/focusの強調は背景色ではなくリングで表現する。 */
+.image-pin-block__pin:hover .image-pin-block__pin-dot,
+.image-pin-block__pin:focus-visible .image-pin-block__pin-dot {
+	box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.2), 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* マーカー画像を設定したピン: 横並び(丸+ラベル)ではなく、画像の下にラベルの縦並びにする */
+.image-pin-block__pin.has-marker-image {
+	flex-direction: column;
+	gap: 2px;
+}
+
+.image-pin-block__pin-marker-image {
+	display: block;
+	max-width: none;
+	width: auto;
+	height: auto;
+	pointer-events: none;
+}
+
+/* 背景色・文字色は「表示設定」パネルの値がインラインstyleで指定される。 */
+.image-pin-block__pin-label {
+	font-size: 12px;
+	line-height: 1.4;
+	padding: 1px 6px;
+	border-radius: 3px;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+.image-pin-block__popover {
+	position: absolute;
+	max-width: 260px;
+	background: #fff;
+	border: 1px solid #ddd;
+	border-radius: 6px;
+	padding: 10px 12px;
+	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+	z-index: 10;
+	font-size: 0.9em;
+	line-height: 1.6;
+}
+
+.image-pin-block__popover[hidden] {
+	display: none;
+}
+
+.image-pin-block__desc-label {
+	font-weight: bold;
+	margin-bottom: 4px;
+}
+
+.image-pin-block__desc-link {
+	color: inherit;
+	text-decoration: underline;
+	display: block;
+}
+
+.image-pin-block__mobile-panel {
+	display: none;
+	margin-top: 12px;
+	padding: 12px;
+	border: 1px solid #ddd;
+	border-radius: 6px;
+	background: #f9f9f9;
+}
+
+.image-pin-block__mobile-panel[hidden] {
+	display: none;
+}
+
+/* 600px は view.js の MOBILE_BREAKPOINT と必ず一致させること */
+@media (max-width: 600px) {
+	.image-pin-block__popover {
+		display: none !important;
+	}
+
+	.image-pin-block__mobile-panel:not([hidden]) {
+		display: block;
+	}
+}
+
+/* 拡大表示(自前実装。テーマのLightboxには依存しない) */
+
+body.image-pin-block__zoom-open {
+	overflow: hidden;
+}
+
+.image-pin-block__zoom-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.85);
+	z-index: 100000;
+	overflow: hidden;
+}
+
+.image-pin-block__zoom-stage {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: grab;
+	touch-action: none;
+}
+
+.image-pin-block__zoom-stage:active {
+	cursor: grabbing;
+}
+
+.image-pin-block__zoom-clone.image-pin-block {
+	position: static;
+}
+
+.image-pin-block__zoom-clone .image-pin-block__wrapper {
+	will-change: transform;
+}
+
+/* 左クリックドラッグでの移動と、ブラウザ標準の画像ドラッグ(持ち出し)が競合しないようにする。
+   JS側で draggable="false" も付与しているが、こちらは保険。 */
+.image-pin-block__zoom-clone img {
+	-webkit-user-drag: none;
+	user-select: none;
+}
+
+/* PC用ポップオーバーは wrapper の子要素なので、wrapper の scale()/translate() と
+   一緒に拡大・移動される。スマホ用の説明エリアは wrapper の兄弟要素で拡大対象外の
+   ため、パン位置に関わらず操作できるよう画面下端に固定表示する。 */
+.image-pin-block__zoom-clone .image-pin-block__mobile-panel {
+	position: fixed;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	top: auto;
+	margin: 0;
+	max-height: 40vh;
+	overflow-y: auto;
+	border-radius: 0;
+	z-index: 100001;
+}
+
+.image-pin-block__zoom-controls {
+	position: fixed;
+	top: 16px;
+	right: 16px;
+	display: flex;
+	gap: 8px;
+	z-index: 100002;
+}
+
+.image-pin-block__zoom-control {
+	width: 40px;
+	height: 40px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.6);
+	color: #fff;
+	border: none;
+	border-radius: 50%;
+	cursor: pointer;
+	padding: 0;
+	font-size: 20px;
+	line-height: 1;
+}
+
+.image-pin-block__zoom-control:hover,
+.image-pin-block__zoom-control:focus-visible {
+	background: rgba(0, 0, 0, 0.85);
+}

@@ -1,0 +1,24 @@
+{
+	"translation-revision-date": "2026-09-12 00:00:00+0000",
+	"generator": "manual",
+	"source": "view.js",
+	"domain": "image-pin-block",
+	"locale_data": {
+		"image-pin-block": {
+			"": {
+				"domain": "image-pin-block",
+				"lang": "ja",
+				"plural-forms": "nplurals=1; plural=0;"
+			},
+			"Close": [
+				"閉じる"
+			],
+			"Zoom out": [
+				"縮小"
+			],
+			"Zoom in": [
+				"拡大"
+			]
+		}
+	}
+}

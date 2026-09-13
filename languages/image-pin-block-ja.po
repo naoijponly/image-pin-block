@@ -1,0 +1,128 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Image Pin Block 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-12T00:00:00+00:00\n"
+"PO-Revision-Date: 2026-09-12T00:00:00+00:00\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: ja\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Domain: image-pin-block\n"
+
+msgid "A block that places pins on an image to show descriptions and jump to other parts of the page."
+msgstr "画像上にピンを配置し、説明の表示とページ内リンクへの移動ができるブロック。"
+
+msgid "Zoom image"
+msgstr "画像を拡大"
+
+msgid "Pin"
+msgstr "ピン"
+
+msgid "(Untitled heading)"
+msgstr "(無題の見出し)"
+
+msgid "(None selected)"
+msgstr "(未選択)"
+
+msgid "Display settings"
+msgstr "表示設定"
+
+msgid "Desktop behavior"
+msgstr "PCでの動作"
+
+msgid "Show description on hover, click to jump"
+msgstr "ホバーで説明表示／クリックで遷移"
+
+msgid "Show description on click, jump via link in description"
+msgstr "クリックで説明表示／説明内のリンクで遷移"
+
+msgid "Mobile behavior"
+msgstr "スマホでの動作"
+
+msgid "Tap to jump immediately"
+msgstr "タップで即遷移"
+
+msgid "First tap shows description, second tap jumps"
+msgstr "1回目タップで説明／2回目タップで遷移"
+
+msgid "Show description on tap, jump via link in description"
+msgstr "タップで説明表示／説明内のリンクで遷移"
+
+msgid "Pin size (px, round marker only)"
+msgstr "ピンのサイズ(px、丸マーカーのみ)"
+
+msgid "Pin color"
+msgstr "ピンの色"
+
+msgid "Pin color (round marker only)"
+msgstr "ピンの色(丸マーカーのみ)"
+
+msgid "Label background color"
+msgstr "ラベルの背景色"
+
+msgid "Label text color"
+msgstr "ラベルの文字色"
+
+msgid "Pin settings"
+msgstr "ピン設定"
+
+msgid "Label"
+msgstr "ラベル"
+
+msgid "Marker image"
+msgstr "マーカー画像"
+
+msgid "Change marker image"
+msgstr "マーカー画像を変更"
+
+msgid "Remove marker image"
+msgstr "マーカー画像を解除"
+
+msgid "Select marker image"
+msgstr "マーカー画像を選択"
+
+msgid "Marker image scale (%)"
+msgstr "マーカー画像の拡大率(%)"
+
+msgid "Show label"
+msgstr "ラベルを表示する"
+
+msgid "Description"
+msgstr "説明"
+
+msgid "Choose target heading"
+msgstr "遷移先の見出しから選択"
+
+msgid "Only heading blocks with an HTML anchor set appear as options. If the heading you want isn't listed, set an HTML anchor for it under Advanced settings, or type the anchor name directly in the field below."
+msgstr "HTMLアンカーを設定した見出しブロックだけが候補に表示されます。出てこない場合は、見出し側の「高度な設定」でHTMLアンカーを設定するか、下の欄にアンカー名を直接入力してください。"
+
+msgid "Enter target anchor manually"
+msgstr "遷移先アンカーを直接入力"
+
+msgid "For destinations that don't appear in the dropdown, such as non-heading blocks, enter the anchor name directly. You don't need to include the # symbol."
+msgstr "見出し以外など、プルダウンに出てこない飛び先はアンカー名を直接入力してください(# は付けなくても構いません)。"
+
+msgid "Delete this pin"
+msgstr "このピンを削除"
+
+msgid "Select image"
+msgstr "画像を選択"
+
+msgid "Add a pin here"
+msgstr "ここにピンを追加"
+
+msgid "Change image"
+msgstr "画像を変更"
+
+msgid "Close"
+msgstr "閉じる"
+
+msgid "Zoom out"
+msgstr "縮小"
+
+msgid "Zoom in"
+msgstr "拡大"
+
