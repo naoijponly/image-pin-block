@@ -6,6 +6,14 @@
 	// style.css の @media (max-width: 600px) と必ず一致させること。
 	var MOBILE_BREAKPOINT = 600;
 
+	// data-label-font-size 属性が読めない場合の最終フォールバック値。
+	// image-pin-block.php の $label_font_size_default と一致させること。
+	var DEFAULT_LABEL_FONT_SIZE = 12;
+
+	// マーカー画像の表示幅は、本体画像(data-natural-width)に対してこの割合を上限とする。
+	// editor.js / image-pin-block.php の同名比率と必ず一致させること。
+	var MARKER_MAX_WIDTH_RATIO = 0.5;
+
 	function isMobileViewport() {
 		return window.matchMedia( '(max-width: ' + MOBILE_BREAKPOINT + 'px)' ).matches;
 	}
@@ -25,6 +33,21 @@
 			return null;
 		}
 		return tpl.content.cloneNode( true );
+	}
+
+	// DOM変更(高さが変わるレイアウト変更など)の直後にスクロールを開始すると、
+	// 変更前の高さを基準に着地位置が計算され、ずれることがある
+	// (モバイルの「1回目タップで説明/2回目タップで遷移」で、説明エリアを閉じるのと
+	// スクロールが同時に走ってずれていたのがこのケース)。requestAnimationFrame を
+	// 二重にネストし、変更が確実に反映されたタイミングまで待ってから callback を呼ぶ。
+	function waitForReflow( callback ) {
+		if ( ! window.requestAnimationFrame ) {
+			callback();
+			return;
+		}
+		window.requestAnimationFrame( function() {
+			window.requestAnimationFrame( callback );
+		} );
 	}
 
 	function scrollToTarget( targetId ) {
@@ -437,6 +460,65 @@
 		};
 	}
 
+	// pinSize/markerScale は画像の元解像度(data-natural-width)を基準にした値として
+	// PHP側で出力されているため、実際の表示幅との比率をかけてから描画する。
+	// clientWidth はレイアウト上の幅で transform の影響を受けないため、拡大表示
+	// (transform: scale() でクローン全体を拡大する)の中で呼んでも二重に拡縮されない。
+	function applyPinScale( wrapperEl ) {
+		if ( ! wrapperEl ) {
+			return;
+		}
+		var naturalWidth = parseFloat( wrapperEl.getAttribute( 'data-natural-width' ) ) || 0;
+		var currentWidth = wrapperEl.clientWidth;
+		var ratio = ( naturalWidth > 0 && currentWidth > 0 ) ? ( currentWidth / naturalWidth ) : 1;
+		var labelFontSizeBase = parseFloat( wrapperEl.getAttribute( 'data-label-font-size' ) ) || DEFAULT_LABEL_FONT_SIZE;
+
+		wrapperEl.querySelectorAll( '.image-pin-block__pin-dot' ).forEach( function( dot ) {
+			var base = parseFloat( dot.getAttribute( 'data-pin-size' ) ) || 0;
+			if ( base > 0 ) {
+				var size = ( base * ratio ) + 'px';
+				dot.style.width = size;
+				dot.style.height = size;
+			}
+		} );
+
+		// マーカー画像は、実寸(naturalWidth)に対する markerScale(%) を、本体画像の
+		// MARKER_MAX_WIDTH_RATIO を上限としてクランプした実寸px幅で表示する。
+		// transform: scale() だけに頼ると、レイアウト上のサイズ(=ボタン要素の当たり判定)が
+		// 縮小前の原寸のまま残ってしまい、マーカー画像が本体画像と同等以上の解像度の場合に
+		// ポインタイベントを奪ってしまうため(ドラッグ・他のピンの操作が破綻する不具合の原因だった)。
+		wrapperEl.querySelectorAll( '.image-pin-block__pin-marker-image' ).forEach( function( img ) {
+			function applyMarkerSize() {
+				var markerNaturalWidth = img.naturalWidth || 0;
+				if ( markerNaturalWidth <= 0 ) {
+					return;
+				}
+				var basePct = parseFloat( img.getAttribute( 'data-marker-scale' ) );
+				if ( isNaN( basePct ) ) {
+					basePct = 100;
+				}
+				var idealWidth = markerNaturalWidth * ( basePct / 100 );
+				var maxBaseWidth = naturalWidth * MARKER_MAX_WIDTH_RATIO;
+				var baseWidth = ( maxBaseWidth > 0 ) ? Math.min( idealWidth, maxBaseWidth ) : idealWidth;
+				img.style.width = ( baseWidth * ratio ) + 'px';
+				img.style.height = 'auto';
+				// PHP側の no-JS フォールバック用インラインスタイル(transform/max-width)を
+				// 上記の実寸指定で完全に上書きする(二重に縮小・拡大されないようにするため)。
+				img.style.transform = '';
+				img.style.maxWidth = '';
+			}
+			if ( img.complete && img.naturalWidth ) {
+				applyMarkerSize();
+			} else {
+				img.addEventListener( 'load', applyMarkerSize, { once: true } );
+			}
+		} );
+
+		wrapperEl.querySelectorAll( '.image-pin-block__pin-label' ).forEach( function( label ) {
+			label.style.fontSize = ( labelFontSizeBase * ratio ) + 'px';
+		} );
+	}
+
 	function initBlock( root ) {
 		var pcBehavior = root.getAttribute( 'data-pc-behavior' ) || 'hover-click';
 		var mobileBehavior = root.getAttribute( 'data-mobile-behavior' ) || 'tap-tap';
@@ -531,8 +613,14 @@
 					}
 					if ( mobileBehavior === 'tap-tap' ) {
 						if ( openPinId === pinId ) {
-							scrollToTarget( targetId );
+							// 説明エリアを閉じるとページの高さが変わる(画像の直下に
+							// ブロック要素として挿入されているため)。閉じるのとスクロールが
+							// 同時に走ると、高さが変化している最中に着地位置が計算されて
+							// ずれるので、レイアウトが確定してからスクロールを開始する。
 							closeMobilePanel();
+							waitForReflow( function() {
+								scrollToTarget( targetId );
+							} );
 						} else {
 							openMobilePanelForPin( pinEl );
 						}
@@ -576,10 +664,22 @@
 		}
 		document.addEventListener( 'click', handleOutsideClick );
 
+		applyPinScale( wrapperEl );
+		var resizeObserver = null;
+		if ( wrapperEl && window.ResizeObserver ) {
+			resizeObserver = new window.ResizeObserver( function() {
+				applyPinScale( wrapperEl );
+			} );
+			resizeObserver.observe( wrapperEl );
+		}
+
 		// 拡大表示用にクローンへ initBlock() を再度呼ぶ際、クローンが破棄されても
-		// document のリスナーが残り続けないよう、後始末できる関数を返す。
+		// document のリスナーや ResizeObserver が残り続けないよう、後始末できる関数を返す。
 		return function dispose() {
 			document.removeEventListener( 'click', handleOutsideClick );
+			if ( resizeObserver ) {
+				resizeObserver.disconnect();
+			}
 		};
 	}
 

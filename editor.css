@@ -67,6 +67,28 @@
 	pointer-events: none;
 }
 
+/* マーカー画像 + リサイズハンドルの位置決め用コンテナ。画像の実サイズにぴったり合わせ、
+   ハンドルはその右下角を基準に position: absolute で重ねる。 */
+.image-pin-block-editor__marker-wrap {
+	position: relative;
+	display: inline-block;
+}
+
+/* 選択中の画像マーカーの右下に表示するリサイズハンドル。大きさは表示幅に応じて
+   JS側(buildPinContent の MARKER_RESIZE_HANDLE_* 定数)がインラインstyleで指定する。 */
+.image-pin-block-editor__marker-resize-handle {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	transform: translate(50%, 50%);
+	background: #1e88e5;
+	border: 2px solid #fff;
+	border-radius: 50%;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+	cursor: nwse-resize;
+	touch-action: none;
+}
+
 .image-pin-block-editor__menu {
 	position: absolute;
 	transform: translate(-50%, 8px);

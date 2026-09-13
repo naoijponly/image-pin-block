@@ -13,10 +13,11 @@
 		"imageHeight": { "type": "number", "default": 0 },
 		"pcBehavior": { "type": "string", "default": "hover-click" },
 		"mobileBehavior": { "type": "string", "default": "tap-tap" },
-		"pinSize": { "type": "number", "default": 24 },
+		"pinSize": { "type": "number", "default": 0 },
 		"pinColor": { "type": "string", "default": "#e63946" },
 		"labelBackgroundColor": { "type": "string", "default": "rgba(255,255,255,0.9)" },
 		"labelTextColor": { "type": "string", "default": "#1e1e1e" },
+		"labelFontSize": { "type": "number", "default": 0 },
 		"pins": { "type": "array", "default": [] }
 	}
 }

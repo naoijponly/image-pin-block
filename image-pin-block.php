@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Image Pin Block
  * Description: A block that places pins on an image to show descriptions and jump to other parts of the page.
- * Version: 0.1.1
+ * Version: 0.1.2
  * Author: naoijponly
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -199,13 +199,32 @@ function image_pin_block_render_callback( $attributes, $content ) {
 	$label_bg_color   = image_pin_block_sanitize_color( isset( $attributes['labelBackgroundColor'] ) ? $attributes['labelBackgroundColor'] : '', 'rgba(255,255,255,0.9)' );
 	$label_text_color = image_pin_block_sanitize_color( isset( $attributes['labelTextColor'] ) ? $attributes['labelTextColor'] : '', '#1e1e1e' );
 
+	// ラベルの文字サイズ(px、画像の元解像度を基準とした値)。上限・下限は editor.js の
+	// LABEL_FONT_SIZE_MIN/MAX と必ず一致させること。$pin_size と同様、範囲外はデフォルトにフォールバックする。
+	$label_font_size_min     = 6;
+	$label_font_size_max     = 200;
+	$label_font_size_default = 12;
+	$label_font_size = ( isset( $attributes['labelFontSize'] ) && is_numeric( $attributes['labelFontSize'] )
+		&& (float) $attributes['labelFontSize'] >= $label_font_size_min && (float) $attributes['labelFontSize'] <= $label_font_size_max )
+		? (float) $attributes['labelFontSize']
+		: $label_font_size_default;
+
+	// マーカー画像の表示幅は、本体画像に対してこの割合を上限とする(editor.js / view.js の
+	// MARKER_MAX_WIDTH_RATIO と必ず一致させること)。マーカー画像が本体画像と同等以上の
+	// 解像度の場合、transform:scale() だけではレイアウト上のサイズ(当たり判定)が縮小前の
+	// 原寸のまま残ってしまい、ドラッグ操作等でポインタイベントを奪ってしまうための対策。
+	// ここではJS未実行時の暫定表示(no-JSフォールバック)として max-width で上限を掛けている。
+	// 実際の表示幅は、マーカー画像自体の実寸を読み取れる view.js が読み込み後に確定する。
+	$marker_max_width_ratio = 0.5;
+	$marker_max_width_px    = ( $image_width > 0 ) ? (int) round( $image_width * $marker_max_width_ratio ) : 0;
+
 	$pc_needs_link     = ( 'click-link' === $pc_behavior );
 	$mobile_needs_link = ( 'tap-link' === $mobile_behavior );
 
 	ob_start();
 	?>
 	<div class="image-pin-block" data-pc-behavior="<?php echo esc_attr( $pc_behavior ); ?>" data-mobile-behavior="<?php echo esc_attr( $mobile_behavior ); ?>">
-		<div class="image-pin-block__wrapper">
+		<div class="image-pin-block__wrapper" data-natural-width="<?php echo esc_attr( $image_width ); ?>" data-label-font-size="<?php echo esc_attr( $label_font_size ); ?>">
 			<img
 				class="image-pin-block__image"
 				src="<?php echo esc_url( $image_url ); ?>"
@@ -265,15 +284,16 @@ function image_pin_block_render_callback( $attributes, $content ) {
 						<img
 							class="image-pin-block__pin-marker-image"
 							src="<?php echo esc_url( $marker_url ); ?>"
-							style="transform:scale(<?php echo esc_attr( $marker_factor ); ?>);"
+							style="transform:scale(<?php echo esc_attr( $marker_factor ); ?>);<?php if ( $marker_max_width_px > 0 ) : ?>max-width:<?php echo esc_attr( $marker_max_width_px ); ?>px;<?php endif; ?>"
+							data-marker-scale="<?php echo esc_attr( $marker_pct ); ?>"
 							alt=""
 						/>
 						<?php if ( $show_marker_label ) : ?>
-							<span class="image-pin-block__pin-label" style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;"><?php echo esc_html( $raw_label ); ?></span>
+							<span class="image-pin-block__pin-label" style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;font-size:<?php echo esc_attr( $label_font_size ); ?>px;"><?php echo esc_html( $raw_label ); ?></span>
 						<?php endif; ?>
 					<?php else : ?>
-						<span class="image-pin-block__pin-dot" style="width:<?php echo esc_attr( $pin_size ); ?>px;height:<?php echo esc_attr( $pin_size ); ?>px;background-color:<?php echo esc_attr( $pin_color ); ?>;" aria-hidden="true"></span>
-						<span class="image-pin-block__pin-label" style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;"><?php echo esc_html( $label ); ?></span>
+						<span class="image-pin-block__pin-dot" style="width:<?php echo esc_attr( $pin_size ); ?>px;height:<?php echo esc_attr( $pin_size ); ?>px;background-color:<?php echo esc_attr( $pin_color ); ?>;" data-pin-size="<?php echo esc_attr( $pin_size ); ?>" aria-hidden="true"></span>
+						<span class="image-pin-block__pin-label" style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;font-size:<?php echo esc_attr( $label_font_size ); ?>px;"><?php echo esc_html( $label ); ?></span>
 					<?php endif; ?>
 				</button>
 			<?php endforeach; ?>

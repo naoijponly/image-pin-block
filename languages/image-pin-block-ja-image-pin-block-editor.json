@@ -49,6 +49,12 @@
 			"Pin size (px, round marker only)": [
 				"ピンのサイズ(px、丸マーカーのみ)"
 			],
+			"Label font size (px)": [
+				"ラベルの文字サイズ(px)"
+			],
+			"Drag to resize": [
+				"ドラッグしてサイズ変更"
+			],
 			"Pin color": [
 				"ピンの色"
 			],

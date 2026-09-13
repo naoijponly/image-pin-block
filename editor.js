@@ -23,12 +23,50 @@
 	// 上限・下限と必ず一致させること(フロント側と編集画面のプレビューがずれないように)。
 	var MARKER_SCALE_MIN = 1;
 	var MARKER_SCALE_MAX = 500;
+	// pinSize/labelFontSize が無効な場合の最終フォールバック値(値が壊れている場合のみ使用)。
+	// 通常は画像選択時に imageWidth を基準に自動計算された値が使われる(下記 AUTO_RATIO 参照)。
 	var DEFAULT_PIN_SIZE = 24;
 	var PIN_SIZE_MIN = 4;
 	var PIN_SIZE_MAX = 300;
+	// 画像選択時、pinSize が未設定(0)であれば imageWidth のこの割合を初期値にする。
+	var PIN_SIZE_AUTO_RATIO = 0.025;
 	var DEFAULT_PIN_COLOR = '#e63946';
 	var DEFAULT_LABEL_BG_COLOR = 'rgba(255,255,255,0.9)';
 	var DEFAULT_LABEL_TEXT_COLOR = '#1e1e1e';
+	// ラベルの文字サイズ(px、画像の元解像度を基準とした値)。block.json の
+	// attributes.default、および image-pin-block.php の同名の上限・下限と必ず一致させること。
+	var DEFAULT_LABEL_FONT_SIZE = 12;
+	var LABEL_FONT_SIZE_MIN = 6;
+	var LABEL_FONT_SIZE_MAX = 200;
+	// 画像選択時、labelFontSize が未設定(0)であれば imageWidth のこの割合を初期値にする。
+	var LABEL_FONT_SIZE_AUTO_RATIO = 0.015;
+	// マーカー画像の表示幅は、本体画像(imageWidth)に対してこの割合を上限とする。
+	// markerScale(%)がどんな値でも、最終的な表示幅がこれを超えないようクランプする。
+	// image-pin-block.php / view.js の同名比率と必ず一致させること。
+	var MARKER_MAX_WIDTH_RATIO = 0.5;
+	// マーカー画像のドラッグリサイズ時、表示幅(px、画面上の実サイズ)がこれより
+	// 小さくならないようにする下限。ピン本体(画像+ラベル)をドラッグで移動する操作自体が
+	// 掴めなくなるほど小さくなることを防ぐための値で、既存の丸マーカーの最小サイズ
+	// (PIN_SIZE_MIN=4px)よりは大きく、通常の操作で指先/マウスで狙いやすい大きさとして
+	// 20px を採用した(編集画面のみで使う値。フロント表示には影響しない)。
+	var MARKER_MIN_DISPLAY_WIDTH_PX = 20;
+	// リサイズハンドルの一辺の長さ(px)。マーカー画像の表示幅の40%を目安にしつつ、
+	// 「小さすぎて掴めない」(下限8px)/「マーカー画像より目立って大きい」(上限18px)の
+	// 両方を避けるようクランプする。
+	var MARKER_RESIZE_HANDLE_RATIO = 0.4;
+	var MARKER_RESIZE_HANDLE_MIN_PX = 8;
+	var MARKER_RESIZE_HANDLE_MAX_PX = 18;
+
+	function clampToRange( n, min, max ) {
+		return Math.min( max, Math.max( min, n ) );
+	}
+
+	// markerScale が範囲外/未設定の場合のデフォルトへのフォールバックを一箇所にまとめる。
+	function resolveMarkerScale( pin ) {
+		return ( pin.markerScale && pin.markerScale >= MARKER_SCALE_MIN && pin.markerScale <= MARKER_SCALE_MAX )
+			? pin.markerScale
+			: DEFAULT_MARKER_SCALE;
+	}
 
 	function generatePinId( pins ) {
 		var existingIds = pins.map( function( p ) { return p.id; } );
@@ -86,19 +124,24 @@
 		return Math.min( 100, Math.max( 0, n ) );
 	}
 
-	function pointFromEvent( evt, wrapperEl ) {
-		if ( ! wrapperEl ) {
-			return null;
-		}
-		var rect = wrapperEl.getBoundingClientRect();
-		var x = ( ( evt.clientX - rect.left ) / rect.width ) * 100;
-		var y = ( ( evt.clientY - rect.top ) / rect.height ) * 100;
+	// client座標(ビューポート基準px)を、wrapperの矩形(rect)を基準にした%座標に変換する。
+	// 0〜100の範囲にクランプするため、rect の外を指す座標を渡しても安全。
+	function percentFromClientPoint( clientX, clientY, rect ) {
+		var x = ( ( clientX - rect.left ) / rect.width ) * 100;
+		var y = ( ( clientY - rect.top ) / rect.height ) * 100;
 		x = Math.min( 100, Math.max( 0, x ) );
 		y = Math.min( 100, Math.max( 0, y ) );
 		return {
 			x: Math.round( x * 10 ) / 10,
 			y: Math.round( y * 10 ) / 10
 		};
+	}
+
+	function pointFromEvent( evt, wrapperEl ) {
+		if ( ! wrapperEl ) {
+			return null;
+		}
+		return percentFromClientPoint( evt.clientX, evt.clientY, wrapperEl.getBoundingClientRect() );
 	}
 
 	// メニュー(「ここにピンを追加」)を配置するための、wrapper 基準のピクセル位置。
@@ -112,28 +155,88 @@
 
 	// ピン内部の見た目(丸マーカー+ラベル横並び／画像マーカー+ラベル下表示)を組み立てる。
 	// 編集画面用。フロント側の見た目は image-pin-block.php 側で同じ構造を出力する。
-	// display: { pinSize, pinColor, labelBackgroundColor, labelTextColor }(ブロック単位の見た目設定)。
+	// display: { pinSize, pinColor, labelBackgroundColor, labelTextColor, labelFontSize, widthRatio,
+	//            mainImageWidth, markerNaturalWidths, onMarkerImageLoad, onMarkerResizePointerDown }
+	// (ブロック単位の見た目設定)。isSelected: 画像マーカーのリサイズハンドルを表示するかどうか。
 	// ピンのサイズ・色は丸マーカーのみに適用し、ラベルの背景色・文字色は丸マーカー・画像マーカー共通。
-	function buildPinContent( pin, display ) {
+	function buildPinContent( pin, display, isSelected ) {
+		var ratio = display.widthRatio || 1;
 		var hasLabelText = !! ( pin.label && '' !== pin.label );
 		var labelStyle = {
 			backgroundColor: display.labelBackgroundColor,
-			color: display.labelTextColor
+			color: display.labelTextColor,
+			fontSize: ( display.labelFontSize * ratio ) + 'px'
 		};
 
 		if ( pin.markerImageUrl ) {
-			var scale = ( pin.markerScale && pin.markerScale >= MARKER_SCALE_MIN && pin.markerScale <= MARKER_SCALE_MAX )
-				? pin.markerScale
-				: DEFAULT_MARKER_SCALE;
+			var scale = resolveMarkerScale( pin );
 			var showLabel = pin.showLabel !== false;
+
+			// マーカー画像の実寸(naturalWidth)が判明していれば、本体画像に対する上限割合
+			// (MARKER_MAX_WIDTH_RATIO)でクランプした実寸px幅を指定する。transform: scale() だけに
+			// 頼ると、レイアウト上のサイズ(=ボタン要素の当たり判定)が原寸のまま残ってしまい、
+			// マーカー画像が本体画像と同等以上の解像度の場合にポインタイベントを奪ってしまうため
+			// (ドラッグ・他のピンの操作が破綻する不具合の原因だった)。
+			// 読み込み前(naturalWidth 未取得)の一瞬だけは、旧来の transform: scale() で暫定表示する。
+			var naturalW = ( display.markerNaturalWidths && display.markerNaturalWidths[ pin.id ] ) || 0;
+			var markerStyle;
+			var displayWidthPx = 0;
+			if ( naturalW > 0 ) {
+				var idealWidth = naturalW * ( scale / 100 );
+				var maxBaseWidth = ( display.mainImageWidth || 0 ) * MARKER_MAX_WIDTH_RATIO;
+				var baseWidth = ( maxBaseWidth > 0 ) ? Math.min( idealWidth, maxBaseWidth ) : idealWidth;
+				displayWidthPx = baseWidth * ratio;
+				markerStyle = { width: displayWidthPx + 'px', height: 'auto' };
+			} else {
+				markerStyle = { transform: 'scale(' + ( ( scale / 100 ) * ratio ) + ')' };
+			}
+
+			var markerImageEl = el( 'img', {
+				key: 'marker-image',
+				className: 'image-pin-block-editor__pin-marker-image',
+				src: pin.markerImageUrl,
+				alt: '',
+				style: markerStyle,
+				ref: function( node ) {
+					if ( display.registerMarkerImageRef ) {
+						display.registerMarkerImageRef( pin.id, node );
+					}
+				},
+				onLoad: function( evt ) {
+					if ( display.onMarkerImageLoad ) {
+						display.onMarkerImageLoad( pin.id, evt.target.naturalWidth || 0 );
+					}
+				}
+			} );
+
+			// リサイズハンドルは、選択中かつ実寸が判明している(=表示幅を計算できる)場合のみ表示する。
+			// ハンドルの大きさは表示幅の40%を目安に、8〜18pxの範囲でクランプする
+			// (小さすぎて掴めない/マーカー画像自体より目立って大きい、の両方を避けるため)。
+			var handleEl = null;
+			if ( isSelected && naturalW > 0 ) {
+				var handleSize = clampToRange( displayWidthPx * MARKER_RESIZE_HANDLE_RATIO, MARKER_RESIZE_HANDLE_MIN_PX, MARKER_RESIZE_HANDLE_MAX_PX );
+				handleEl = el( 'span', {
+					key: 'marker-resize-handle',
+					className: 'image-pin-block-editor__marker-resize-handle',
+					style: { width: handleSize + 'px', height: handleSize + 'px' },
+					title: __( 'Drag to resize', 'image-pin-block' ),
+					onPointerDown: function( evt ) {
+						evt.stopPropagation();
+						if ( display.onMarkerResizePointerDown ) {
+							display.onMarkerResizePointerDown( pin.id, evt );
+						}
+					},
+					onClick: function( evt ) { evt.stopPropagation(); }
+				} );
+			}
+
 			var children = [
-				el( 'img', {
-					key: 'marker-image',
-					className: 'image-pin-block-editor__pin-marker-image',
-					src: pin.markerImageUrl,
-					alt: '',
-					style: { transform: 'scale(' + ( scale / 100 ) + ')' }
-				} )
+				el(
+					'span',
+					{ key: 'marker-wrap', className: 'image-pin-block-editor__marker-wrap' },
+					markerImageEl,
+					handleEl
+				)
 			];
 			// ラベル未入力のときは代替文字を画面に出さず、画像だけを表示する
 			// (丸マーカーと異なり「ピン」を補わない)。
@@ -151,14 +254,50 @@
 
 		var dotLabelText = hasLabelText ? pin.label : __( 'Pin', 'image-pin-block' );
 		var dotStyle = {
-			width: display.pinSize + 'px',
-			height: display.pinSize + 'px',
+			width: ( display.pinSize * ratio ) + 'px',
+			height: ( display.pinSize * ratio ) + 'px',
 			backgroundColor: display.pinColor
 		};
 		return [
 			el( 'span', { key: 'dot', className: 'image-pin-block-editor__pin-dot', style: dotStyle, 'aria-hidden': 'true' } ),
 			el( 'span', { key: 'label', className: 'image-pin-block-editor__pin-label', style: labelStyle }, dotLabelText )
 		];
+	}
+
+	// 数値入力欄: 入力中はバリデーションしない下書き状態を保持し、blur/Enterで確定する。
+	// 確定時、空文字なら defaultValue に戻し、範囲外ならデフォルトに戻さず範囲内にクランプする。
+	// (入力途中の値を都度検証すると、既存の値を消して打ち直す通常の操作ができなくなるため)
+	function ClampedNumberControl( props ) {
+		var draftState = useState( String( props.value ) );
+		var draft = draftState[ 0 ];
+		var setDraft = draftState[ 1 ];
+
+		function commit() {
+			var trimmed = draft.trim();
+			var next;
+			if ( '' === trimmed ) {
+				next = props.defaultValue;
+			} else {
+				var n = parseFloat( trimmed );
+				next = isNaN( n ) ? props.defaultValue : Math.min( props.max, Math.max( props.min, n ) );
+			}
+			setDraft( String( next ) );
+			props.onCommit( next );
+		}
+
+		return el( TextControl, {
+			label: props.label,
+			type: 'number',
+			value: draft,
+			onChange: function( value ) { setDraft( value ); },
+			onBlur: commit,
+			onKeyDown: function( evt ) {
+				if ( evt.key === 'Enter' ) {
+					evt.preventDefault();
+					commit();
+				}
+			}
+		} );
 	}
 
 	function Edit( props ) {
@@ -173,7 +312,11 @@
 				: DEFAULT_PIN_SIZE,
 			pinColor: attributes.pinColor || DEFAULT_PIN_COLOR,
 			labelBackgroundColor: attributes.labelBackgroundColor || DEFAULT_LABEL_BG_COLOR,
-			labelTextColor: attributes.labelTextColor || DEFAULT_LABEL_TEXT_COLOR
+			labelTextColor: attributes.labelTextColor || DEFAULT_LABEL_TEXT_COLOR,
+			labelFontSize: ( attributes.labelFontSize && attributes.labelFontSize >= LABEL_FONT_SIZE_MIN && attributes.labelFontSize <= LABEL_FONT_SIZE_MAX )
+				? attributes.labelFontSize
+				: DEFAULT_LABEL_FONT_SIZE,
+			mainImageWidth: attributes.imageWidth || 0
 		};
 
 		var selectedState = useState( null );
@@ -189,6 +332,180 @@
 
 		var wrapperRef = useRef( null );
 		var blockProps = useBlockProps();
+
+		// pinSize/markerScale は「画像の元解像度(imageWidth)を基準にした値」として扱い、
+		// 実際の表示幅との比率(widthRatio)を掛けてから描画する。これにより、画像が
+		// レスポンシブに縮小されてもピンが画像に対して同じ比率のまま拡縮する。
+		// 編集画面・フロントの両方で同じ考え方を使うことで見た目を一致させている。
+		var widthRatioState = useState( 1 );
+		var widthRatio = widthRatioState[ 0 ];
+		var setWidthRatio = widthRatioState[ 1 ];
+
+		useEffect( function() {
+			var wrapperEl = wrapperRef.current;
+			if ( ! wrapperEl || ! attributes.imageUrl ) {
+				return;
+			}
+
+			function recalc() {
+				var naturalWidth = attributes.imageWidth || 0;
+				var currentWidth = wrapperEl.clientWidth;
+				var nextRatio = ( naturalWidth > 0 && currentWidth > 0 ) ? ( currentWidth / naturalWidth ) : 1;
+				setWidthRatio( nextRatio );
+			}
+
+			recalc();
+
+			if ( ! window.ResizeObserver ) {
+				return;
+			}
+			var ro = new window.ResizeObserver( recalc );
+			ro.observe( wrapperEl );
+			return function() { ro.disconnect(); };
+		}, [ attributes.imageUrl, attributes.imageWidth ] );
+
+		displaySettings.widthRatio = widthRatio;
+
+		// マーカー画像の実寸(naturalWidth、px)をピンIDごとにキャッシュする。
+		// <img> の読み込み完了(onLoad)時に記録し、buildPinContent() が上限クランプの計算に使う
+		// (MARKER_MAX_WIDTH_RATIO 参照)。
+		var markerNaturalWidthsState = useState( {} );
+		var markerNaturalWidths = markerNaturalWidthsState[ 0 ];
+		var setMarkerNaturalWidths = markerNaturalWidthsState[ 1 ];
+
+		function handleMarkerImageLoad( pinId, naturalWidth ) {
+			if ( ! naturalWidth || markerNaturalWidths[ pinId ] === naturalWidth ) {
+				return;
+			}
+			var patch = {};
+			patch[ pinId ] = naturalWidth;
+			setMarkerNaturalWidths( function( prev ) {
+				return Object.assign( {}, prev, patch );
+			} );
+		}
+
+		displaySettings.markerNaturalWidths = markerNaturalWidths;
+		displaySettings.onMarkerImageLoad = handleMarkerImageLoad;
+
+		// マーカー画像の実際のDOM要素(<img>)をピンIDごとに保持する。再レンダリングを
+		// 発生させる必要が無いデータなので state ではなく ref で持つ。移動・リサイズ時に
+		// getBoundingClientRect() で実際の描画位置・サイズを測定し、「マーカー画像の外形が
+		// 本体画像の内側に収まる」よう範囲を制限するために使う(flexboxの中央寄せや
+		// ラベルの有無による見た目上の位置ずれを、数式で再現せず実測することで正確に扱う)。
+		var markerImageRefsRef = useRef( {} );
+		function registerMarkerImageRef( pinId, node ) {
+			if ( node ) {
+				markerImageRefsRef.current[ pinId ] = node;
+			} else {
+				delete markerImageRefsRef.current[ pinId ];
+			}
+		}
+		displaySettings.registerMarkerImageRef = registerMarkerImageRef;
+
+		// マーカー画像のリサイズハンドルのドラッグ操作。ハンドルは選択中のピンにしか
+		// 表示されないため、常に「選択中かつ画像マーカーを持つピン」に対して呼ばれる。
+		// handlePinPointerDown(位置移動)と同様、setPointerCapture でハンドル要素自身に
+		// 以降の pointermove/pointerup を固定する(handleEl 側で stopPropagation 済みのため
+		// ピン本体側の位置移動ハンドラとは競合しない)。
+		function handleMarkerResizePointerDown( pinId, evt ) {
+			evt.preventDefault();
+			var pin = pins.filter( function( p ) { return p.id === pinId; } )[ 0 ];
+			var naturalW = markerNaturalWidths[ pinId ] || 0;
+			var wrapperEl = wrapperRef.current;
+			if ( ! pin || naturalW <= 0 || ! wrapperEl ) {
+				return;
+			}
+
+			var ratio = widthRatio || 1;
+			var mainWidth = attributes.imageWidth || 0;
+			// 本体画像の幅が不明な場合は、markerScale の上限(MARKER_SCALE_MAX)自体を上限とする
+			// (MARKER_MAX_WIDTH_RATIO による追加の上限は適用しない)。
+			var maxBaseWidthFromRatio = ( mainWidth > 0 ) ? ( mainWidth * MARKER_MAX_WIDTH_RATIO ) : ( naturalW * MARKER_SCALE_MAX / 100 );
+
+			// マーカー画像の外形が本体画像の内側に収まるよう、表示幅にもう一つ上限を設ける。
+			// flexboxの中央寄せにより、マーカー画像はラベルの有無・高さに関わらず「自分自身の
+			// 中心点」を軸に拡大縮小される(位置は変わらない)ため、ドラッグ開始時点で測定した
+			// その中心点と本体画像の四辺との距離のうち、最も小さいものが拡大できる限度になる。
+			var markerImgEl = markerImageRefsRef.current[ pinId ];
+			var maxDisplayWidthFromContainment = Number.POSITIVE_INFINITY;
+			if ( markerImgEl ) {
+				var imgRect0 = markerImgEl.getBoundingClientRect();
+				if ( imgRect0.width > 0 && imgRect0.height > 0 ) {
+					var aspectRatio = imgRect0.width / imgRect0.height;
+					var imageCenterX = imgRect0.left + imgRect0.width / 2;
+					var imageCenterY = imgRect0.top + imgRect0.height / 2;
+					var wRect0 = wrapperEl.getBoundingClientRect();
+					var maxWidthFromLeft = 2 * ( imageCenterX - wRect0.left );
+					var maxWidthFromRight = 2 * ( wRect0.right - imageCenterX );
+					var maxWidthFromTop = 2 * ( imageCenterY - wRect0.top ) * aspectRatio;
+					var maxWidthFromBottom = 2 * ( wRect0.bottom - imageCenterY ) * aspectRatio;
+					maxDisplayWidthFromContainment = Math.max( 0, Math.min( maxWidthFromLeft, maxWidthFromRight, maxWidthFromTop, maxWidthFromBottom ) );
+				}
+			}
+
+			// 上記2つの上限(本体画像幅の50%、画像内に収まる範囲)のうち、より厳しい方を採用する。
+			var maxDisplayWidth = Math.min( maxBaseWidthFromRatio * ratio, maxDisplayWidthFromContainment );
+			var maxBaseWidth = maxDisplayWidth / ratio;
+
+			// ドラッグで到達できる markerScale の実効範囲。表示幅の上限・下限(px)を
+			// markerScale(%)に換算し、既存の 1〜500% の範囲内に収める。
+			var effectiveMaxScale = clampToRange( ( maxBaseWidth / naturalW ) * 100, MARKER_SCALE_MIN, MARKER_SCALE_MAX );
+			var minScaleForFloor = ( MARKER_MIN_DISPLAY_WIDTH_PX / ratio / naturalW ) * 100;
+			var effectiveMinScale = clampToRange( minScaleForFloor, MARKER_SCALE_MIN, effectiveMaxScale );
+
+			var startScale = resolveMarkerScale( pin );
+			var startBaseWidth = Math.min( naturalW * ( startScale / 100 ), maxBaseWidth );
+			var startDisplayWidth = startBaseWidth * ratio;
+
+			var pointerId = evt.pointerId;
+			var handleEl = evt.currentTarget;
+			var startClientX = evt.clientX;
+
+			if ( handleEl.setPointerCapture ) {
+				handleEl.setPointerCapture( pointerId );
+			}
+
+			function handleMove( moveEvt ) {
+				if ( moveEvt.pointerId !== pointerId ) {
+					return;
+				}
+				moveEvt.stopPropagation();
+				var deltaX = moveEvt.clientX - startClientX;
+				var newDisplayWidth = clampToRange( startDisplayWidth + deltaX, MARKER_MIN_DISPLAY_WIDTH_PX, maxDisplayWidth );
+				var newScale = ( newDisplayWidth / ratio / naturalW ) * 100;
+				newScale = clampToRange( newScale, effectiveMinScale, effectiveMaxScale );
+				newScale = Math.round( newScale * 10 ) / 10;
+				updatePins(
+					pins.map( function( p ) {
+						if ( p.id !== pinId ) {
+							return p;
+						}
+						return Object.assign( {}, p, { markerScale: newScale } );
+					} )
+				);
+			}
+
+			function endDrag( endEvt ) {
+				if ( endEvt && endEvt.pointerId !== pointerId ) {
+					return;
+				}
+				if ( endEvt ) {
+					endEvt.stopPropagation();
+				}
+				if ( handleEl.hasPointerCapture && handleEl.hasPointerCapture( pointerId ) ) {
+					handleEl.releasePointerCapture( pointerId );
+				}
+				handleEl.removeEventListener( 'pointermove', handleMove );
+				handleEl.removeEventListener( 'pointerup', endDrag );
+				handleEl.removeEventListener( 'pointercancel', endDrag );
+			}
+
+			handleEl.addEventListener( 'pointermove', handleMove );
+			handleEl.addEventListener( 'pointerup', endDrag );
+			handleEl.addEventListener( 'pointercancel', endDrag );
+		}
+
+		displaySettings.onMarkerResizePointerDown = handleMarkerResizePointerDown;
 
 		// getClientIdsWithDescendants() はネストの深さに関わらず、投稿内の全ブロックの
 		// clientId をフラットに返す(グループ/カラム内の見出しも含む)。
@@ -244,13 +561,24 @@
 			setAttributes( { pins: nextPins } );
 		}
 
+		// pinSize/labelFontSize が未設定(0)の場合のみ、新しい画像の幅から自動計算する。
+		// 一度でも値が設定されていれば(ユーザーの調整、または過去の自動計算のいずれでも)、
+		// 以後の画像変更で上書きしない(ユーザーが調整した値を尊重するため)。
 		function handleSelectImage( media ) {
-			setAttributes( {
+			var newImageWidth = media.width || 0;
+			var updates = {
 				imageId: media.id,
 				imageUrl: media.url,
-				imageWidth: media.width || 0,
+				imageWidth: newImageWidth,
 				imageHeight: media.height || 0
-			} );
+			};
+			if ( ! attributes.pinSize && newImageWidth > 0 ) {
+				updates.pinSize = clampToRange( Math.round( newImageWidth * PIN_SIZE_AUTO_RATIO ), PIN_SIZE_MIN, PIN_SIZE_MAX );
+			}
+			if ( ! attributes.labelFontSize && newImageWidth > 0 ) {
+				updates.labelFontSize = clampToRange( Math.round( newImageWidth * LABEL_FONT_SIZE_AUTO_RATIO ), LABEL_FONT_SIZE_MIN, LABEL_FONT_SIZE_MAX );
+			}
+			setAttributes( updates );
 		}
 
 		// 画像上の「何もない場所」をクリック → その位置に「ここにピンを追加」メニューを表示する。
@@ -314,15 +642,52 @@
 				pinEl.setPointerCapture( pointerId );
 			}
 
+			// マーカー画像を持つピンは、その外形が本体画像の内側に収まるよう移動範囲を
+			// 制限する(丸マーカーは対象外。理由は buildPinContent 呼び出し側のコメント参照)。
+			// flexboxの中央寄せ・ラベルの有無による見た目上のオフセットを数式で再現する代わりに、
+			// ドラッグ開始時点で実際に描画されたマーカー画像の位置を getBoundingClientRect() で
+			// 測定し、アンカー点(x%,y%が指す位置)からの相対オフセットとして保持する。
+			// このオフセットとサイズは、位置移動だけでは(リサイズを伴わないため)変化しない。
+			var pinForDrag = pins.filter( function( p ) { return p.id === pinId; } )[ 0 ];
+			var moveContainment = null;
+			if ( pinForDrag && pinForDrag.markerImageUrl ) {
+				var markerImgElForMove = markerImageRefsRef.current[ pinId ];
+				if ( markerImgElForMove ) {
+					var wRectForMove = wrapperEl.getBoundingClientRect();
+					var imgRectForMove = markerImgElForMove.getBoundingClientRect();
+					var anchorClientX = wRectForMove.left + ( clampPercent( pinForDrag.x ) / 100 ) * wRectForMove.width;
+					var anchorClientY = wRectForMove.top + ( clampPercent( pinForDrag.y ) / 100 ) * wRectForMove.height;
+					moveContainment = {
+						offsetX: imgRectForMove.left - anchorClientX,
+						offsetY: imgRectForMove.top - anchorClientY,
+						width: imgRectForMove.width,
+						height: imgRectForMove.height
+					};
+				}
+			}
+
 			function handleMove( moveEvt ) {
 				if ( moveEvt.pointerId !== pointerId ) {
 					return;
 				}
 				moveEvt.stopPropagation();
-				var point = pointFromEvent( moveEvt, wrapperEl );
-				if ( ! point ) {
-					return;
+
+				var clientX = moveEvt.clientX;
+				var clientY = moveEvt.clientY;
+				var wRect = wrapperEl.getBoundingClientRect();
+
+				if ( moveContainment ) {
+					var minAnchorX = wRect.left - moveContainment.offsetX;
+					var maxAnchorX = wRect.right - moveContainment.offsetX - moveContainment.width;
+					var minAnchorY = wRect.top - moveContainment.offsetY;
+					var maxAnchorY = wRect.bottom - moveContainment.offsetY - moveContainment.height;
+					// マーカー画像が本体画像より大きく、どこに置いても収まりきらない場合は
+					// (通常は上限クランプにより起こらないが念のため)、中央寄せで妥協する。
+					clientX = ( minAnchorX <= maxAnchorX ) ? clampToRange( clientX, minAnchorX, maxAnchorX ) : ( minAnchorX + maxAnchorX ) / 2;
+					clientY = ( minAnchorY <= maxAnchorY ) ? clampToRange( clientY, minAnchorY, maxAnchorY ) : ( minAnchorY + maxAnchorY ) / 2;
 				}
+
+				var point = percentFromClientPoint( clientX, clientY, wRect );
 				updatePins(
 					pins.map( function( p ) {
 						if ( p.id !== pinId ) {
@@ -432,16 +797,24 @@
 					],
 					onChange: function( value ) { setAttributes( { mobileBehavior: value } ); }
 				} ),
-				el( TextControl, {
+				el( ClampedNumberControl, {
 					label: __( 'Pin size (px, round marker only)', 'image-pin-block' ),
-					type: 'number',
-					value: String( displaySettings.pinSize ),
-					onChange: function( value ) {
-						var n = parseFloat( value );
-						if ( isNaN( n ) || n < PIN_SIZE_MIN || n > PIN_SIZE_MAX ) {
-							n = DEFAULT_PIN_SIZE;
-						}
+					value: displaySettings.pinSize,
+					min: PIN_SIZE_MIN,
+					max: PIN_SIZE_MAX,
+					defaultValue: DEFAULT_PIN_SIZE,
+					onCommit: function( n ) {
 						setAttributes( { pinSize: n } );
+					}
+				} ),
+				el( ClampedNumberControl, {
+					label: __( 'Label font size (px)', 'image-pin-block' ),
+					value: displaySettings.labelFontSize,
+					min: LABEL_FONT_SIZE_MIN,
+					max: LABEL_FONT_SIZE_MAX,
+					defaultValue: DEFAULT_LABEL_FONT_SIZE,
+					onCommit: function( n ) {
+						setAttributes( { labelFontSize: n } );
 					}
 				} )
 			),
@@ -524,15 +897,18 @@
 							} )
 						),
 					selectedPin.markerImageUrl
-						? el( TextControl, {
+						? el( ClampedNumberControl, {
+							// key にピンID + 現在値を含め、リサイズハンドルのドラッグで markerScale が
+							// 変わった際にも表示を追従させる(値が変わるたびに再マウントし、下書き状態を
+							// 現在値でリセットする)。ドラッグ以外(このフィールドへの入力中)は
+							// 属性値自体が変わらないため、入力途中の下書きが失われることはない。
+							key: selectedPinId + ':' + ( selectedPin.markerScale || DEFAULT_MARKER_SCALE ),
 							label: __( 'Marker image scale (%)', 'image-pin-block' ),
-							type: 'number',
-							value: String( selectedPin.markerScale || DEFAULT_MARKER_SCALE ),
-							onChange: function( value ) {
-								var n = parseFloat( value );
-								if ( isNaN( n ) || n < MARKER_SCALE_MIN || n > MARKER_SCALE_MAX ) {
-									n = DEFAULT_MARKER_SCALE;
-								}
+							value: selectedPin.markerScale || DEFAULT_MARKER_SCALE,
+							min: MARKER_SCALE_MIN,
+							max: MARKER_SCALE_MAX,
+							defaultValue: DEFAULT_MARKER_SCALE,
+							onCommit: function( n ) {
 								updateSelectedPin( 'markerScale', n );
 							}
 						} )
@@ -612,7 +988,7 @@
 					onPointerDown: function( evt ) { handlePinPointerDown( pin.id, evt ); },
 					onClick: function( evt ) { handlePinClick( pin.id, evt ); }
 				},
-				buildPinContent( pin, displaySettings )
+				buildPinContent( pin, displaySettings, isSelected )
 			);
 		} );
 
@@ -683,10 +1059,13 @@
 			imageHeight: { type: 'number', default: 0 },
 			pcBehavior: { type: 'string', default: 'hover-click' },
 			mobileBehavior: { type: 'string', default: 'tap-tap' },
-			pinSize: { type: 'number', default: DEFAULT_PIN_SIZE },
+			// 0 は「未設定」を表すセンチネル値。画像選択時に imageWidth を基準に自動計算される
+			// (handleSelectImage 参照)。block.json の同名属性の default と必ず一致させること。
+			pinSize: { type: 'number', default: 0 },
 			pinColor: { type: 'string', default: DEFAULT_PIN_COLOR },
 			labelBackgroundColor: { type: 'string', default: DEFAULT_LABEL_BG_COLOR },
 			labelTextColor: { type: 'string', default: DEFAULT_LABEL_TEXT_COLOR },
+			labelFontSize: { type: 'number', default: 0 },
 			pins: { type: 'array', default: [] }
 		},
 		edit: Edit,
