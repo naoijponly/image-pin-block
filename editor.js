@@ -701,24 +701,34 @@
 
 		displaySettings.onMarkerResizePointerDown = handleMarkerResizePointerDown;
 
-		// getClientIdsWithDescendants() はネストの深さに関わらず、投稿内の全ブロックの
-		// clientId をフラットに返す(グループ/カラム内の見出しも含む)。
-		// 依存配列を渡さず、レンダリングのたびに再評価してブロックの追加・編集に追従させる。
+		// getBlocksByName() はブロックエディタのストアが保持する索引を使うため、
+		// 投稿内の全ブロックを毎回手動で走査する(旧実装)より効率的で、記事のブロック数が
+		// 多いほど差が大きい。以前の実装は依存配列を渡さずレンダリングのたびに
+		// getClientIdsWithDescendants()+全ブロック走査をしており、これ自体が独立した
+		// パフォーマンス上の問題だった(記事が大きいほど編集画面全体が重くなる)ため、
+		// getBlocksByName() を使う形に修正し、依存配列(空配列 = このセレクタはどの
+		// ローカル変数にも依存しないため安定している)も渡すようにした。
+		// getBlocksByName() 非対応の古い環境向けに、手動走査へのフォールバックを残す。
 		var headingBlocks = useSelect( function( select ) {
 			var editorSelect = select( 'core/block-editor' );
-			if ( ! editorSelect || ! editorSelect.getClientIdsWithDescendants ) {
+			if ( ! editorSelect || ! editorSelect.getBlock ) {
 				return [];
 			}
-			var clientIds = editorSelect.getClientIdsWithDescendants();
-			var result = [];
-			clientIds.forEach( function( clientId ) {
-				var block = editorSelect.getBlock( clientId );
-				if ( block && block.name === 'core/heading' ) {
-					result.push( block );
-				}
-			} );
-			return result;
-		} );
+			var headingClientIds;
+			if ( editorSelect.getBlocksByName ) {
+				headingClientIds = editorSelect.getBlocksByName( 'core/heading' );
+			} else if ( editorSelect.getClientIdsWithDescendants ) {
+				headingClientIds = editorSelect.getClientIdsWithDescendants().filter( function( clientId ) {
+					var block = editorSelect.getBlock( clientId );
+					return block && block.name === 'core/heading';
+				} );
+			} else {
+				headingClientIds = [];
+			}
+			return headingClientIds
+				.map( function( clientId ) { return editorSelect.getBlock( clientId ); } )
+				.filter( Boolean );
+		}, [] );
 
 		var targetOptions = [ { value: '', label: __( '(None selected)', 'image-pin-block' ) } ]
 			.concat( buildHeadingOptions( headingBlocks || [] ) );
