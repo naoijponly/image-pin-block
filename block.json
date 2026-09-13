@@ -18,6 +18,14 @@
 		"labelBackgroundColor": { "type": "string", "default": "rgba(255,255,255,0.9)" },
 		"labelTextColor": { "type": "string", "default": "#1e1e1e" },
 		"labelFontSize": { "type": "number", "default": 0 },
+		"labelBackgroundOpacity": { "type": "number", "default": 100 },
+		"labelStrokeColor": { "type": "string", "default": "#ffffff" },
+		"labelStrokeWidth": { "type": "string", "default": "none" },
+		"popoverBackgroundColor": { "type": "string", "default": "" },
+		"popoverBackgroundOpacity": { "type": "number", "default": 100 },
+		"popoverTextColor": { "type": "string", "default": "" },
+		"popoverStrokeColor": { "type": "string", "default": "#ffffff" },
+		"popoverStrokeWidth": { "type": "string", "default": "none" },
 		"pins": { "type": "array", "default": [] }
 	}
 }

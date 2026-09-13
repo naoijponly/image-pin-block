@@ -123,3 +123,52 @@
 	border-radius: 4px;
 	background: #f0f0f0;
 }
+
+/* 「ピンラベル」「ポップオーバー」パネル内の色設定1行(スウォッチボタン+ラベル)。 */
+.image-pin-block-editor__color-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.image-pin-block-editor__color-swatch-button {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.image-pin-block-editor__color-swatch {
+	display: inline-block;
+	width: 20px;
+	height: 20px;
+	border-radius: 3px;
+	border: 1px solid #ccc;
+	/* 透明・半透明の色でも分かるよう、市松模様を下敷きにする */
+	background-image:
+		linear-gradient(45deg, #ccc 25%, transparent 25%),
+		linear-gradient(-45deg, #ccc 25%, transparent 25%),
+		linear-gradient(45deg, transparent 75%, #ccc 75%),
+		linear-gradient(-45deg, transparent 75%, #ccc 75%);
+	background-size: 8px 8px;
+	background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+
+/* 「ポップオーバー」パネル内の見本プレビュー。実際の .image-pin-block__popover とは
+   別要素・別クラスだが、背景不透明度・文字色・縁取りの計算ロジック(PopoverPreview関数)は
+   image-pin-block.php のレンダリングと同じ考え方(色+不透明度の合成、太さ'none'なら
+   縁取りを一切出力しない)を用いている。 */
+.image-pin-block-editor__popover-preview {
+	max-width: 260px;
+	border: 1px solid #ddd;
+	border-radius: 6px;
+	padding: 10px 12px;
+	font-size: 0.9em;
+	line-height: 1.6;
+	margin-top: 8px;
+}
+
+.image-pin-block-editor__popover-preview-label {
+	font-weight: bold;
+	margin-bottom: 4px;
+}

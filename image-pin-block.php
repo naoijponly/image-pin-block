@@ -154,6 +154,33 @@ function image_pin_block_sanitize_color( $value, $default ) {
 }
 
 /**
+ * 色($color。あらかじめ image_pin_block_sanitize_color() で検証済みの値を渡すこと)に
+ * 不透明度(0〜100)を掛け合わせた最終的な色を返す。
+ *
+ * $color は hex(3/4/6/8桁)・rgb()/rgba()/hsl()/hsla()・CSS標準色名(currentColor含む)の
+ * いずれかであり得るため、PHP側で個別に数値を解析して再構築するのではなく、CSS の
+ * `color-mix(in srgb, <color> <pct>%, transparent)` を使う。$color を $opacity_pct% だけ
+ * transparent と混ぜることになるため、named color / transparent / 既存の rgba() の
+ * いずれでも一律に「既存のアルファ × 不透明度」相当の結果になる。
+ *
+ * 当初は CSS Color 5 の相対カラー構文(`rgb(from <color> r g b / calc(alpha * n))`)を
+ * 使っていたが、Firefox 128+ が必要で対応範囲が狭く、未対応ブラウザでは宣言ごと無効になり
+ * 背景色が消えてしまう(縮退ではなく機能喪失になる)ため、より対応の広い color-mix
+ * (Chrome 111+ / Safari 16.2+ / Firefox 113+)に置き換えた。
+ *
+ * $opacity_pct が 100(=変更なし)のときは、後方互換のため $color をバイト単位で
+ * そのまま返す(color-mix で包まない)。
+ */
+function image_pin_block_apply_opacity( $color, $opacity_pct ) {
+	$opacity_pct = max( 0, min( 100, (float) $opacity_pct ) );
+	if ( 100.0 === $opacity_pct ) {
+		return $color;
+	}
+	$pct = number_format( $opacity_pct, 3, '.', '' );
+	return 'color-mix(in srgb, ' . $color . ' ' . $pct . '%, transparent)';
+}
+
+/**
  * フロント側の HTML を組み立てる。
  *
  * PC 用ポップオーバーとスマホ用説明エリアそれぞれに <template> で
@@ -209,6 +236,66 @@ function image_pin_block_render_callback( $attributes, $content ) {
 		? (float) $attributes['labelFontSize']
 		: $label_font_size_default;
 
+	// ラベル背景の不透明度(0〜100)。$label_bg_color に直接反映し、新しいCSSカスタム
+	// プロパティは増やさない(既存のインライン background-color の値を差し替えるだけにする)。
+	// labelBackgroundOpacity が既定値(100)のときは image_pin_block_apply_opacity() が
+	// 元の文字列をそのまま返すため、出力は一切変わらない(後方互換)。
+	$label_bg_opacity = ( isset( $attributes['labelBackgroundOpacity'] ) && is_numeric( $attributes['labelBackgroundOpacity'] )
+		&& (float) $attributes['labelBackgroundOpacity'] >= 0 && (float) $attributes['labelBackgroundOpacity'] <= 100 )
+		? (float) $attributes['labelBackgroundOpacity']
+		: 100;
+	$label_bg_color = image_pin_block_apply_opacity( $label_bg_color, $label_bg_opacity );
+
+	// ラベル文字の縁取り。太さが 'none'(既定)のときは、色の値に関わらず
+	// 縁取り関連のCSSカスタムプロパティ・data属性を一切出力しない(ゲートは太さ側)。
+	$stroke_widths = array( 'none', 'thin', 'normal', 'thick' );
+	$label_stroke_width = isset( $attributes['labelStrokeWidth'] ) && in_array( $attributes['labelStrokeWidth'], $stroke_widths, true )
+		? $attributes['labelStrokeWidth']
+		: 'none';
+	$label_stroke_color = image_pin_block_sanitize_color( isset( $attributes['labelStrokeColor'] ) ? $attributes['labelStrokeColor'] : '', '#ffffff' );
+
+	// ポップオーバー(PC用吹き出し)・スマホの説明エリア共通の背景色・文字色・縁取り。
+	// 背景色/文字色は新規属性のため、未設定(空文字)を「現行の見た目(白背景・テーマの
+	// 文字色を継承)を維持する」ためのセンチネル値として扱う(空なら何も出力しない)。
+	$popover_bg_color_raw = image_pin_block_sanitize_color( isset( $attributes['popoverBackgroundColor'] ) ? $attributes['popoverBackgroundColor'] : '', '' );
+	$popover_text_color   = image_pin_block_sanitize_color( isset( $attributes['popoverTextColor'] ) ? $attributes['popoverTextColor'] : '', '' );
+
+	$popover_bg_opacity = ( isset( $attributes['popoverBackgroundOpacity'] ) && is_numeric( $attributes['popoverBackgroundOpacity'] )
+		&& (float) $attributes['popoverBackgroundOpacity'] >= 0 && (float) $attributes['popoverBackgroundOpacity'] <= 100 )
+		? (float) $attributes['popoverBackgroundOpacity']
+		: 100;
+
+	// 背景色・不透明度のどちらかが既定値と異なる場合のみ、実効色を計算する。
+	// 背景色が未設定なら、style.css側の現行ハードコード値(#ffffff)を基準に不透明度を適用する。
+	$popover_bg_color_final = '';
+	if ( '' !== $popover_bg_color_raw || 100.0 !== $popover_bg_opacity ) {
+		$popover_bg_base        = ( '' !== $popover_bg_color_raw ) ? $popover_bg_color_raw : '#ffffff';
+		$popover_bg_color_final = image_pin_block_apply_opacity( $popover_bg_base, $popover_bg_opacity );
+	}
+
+	$popover_stroke_width = isset( $attributes['popoverStrokeWidth'] ) && in_array( $attributes['popoverStrokeWidth'], $stroke_widths, true )
+		? $attributes['popoverStrokeWidth']
+		: 'none';
+	$popover_stroke_color = image_pin_block_sanitize_color( isset( $attributes['popoverStrokeColor'] ) ? $attributes['popoverStrokeColor'] : '', '#ffffff' );
+
+	// ブロックルートに出力するCSSカスタムプロパティ。非デフォルト時のみ追加する
+	// (これにより、全属性が既定値のときは style="" 自体が出力されず、v0.1.2 と
+	// 出力バイトが完全に一致する)。カスタムプロパティは継承されるため、ラベル/
+	// ポップオーバー/説明エリア側の style.css では var(--ipb-xxx, 初期値) として参照する。
+	$root_custom_props = array();
+	if ( 'none' !== $label_stroke_width ) {
+		$root_custom_props['--ipb-label-stroke-color'] = $label_stroke_color;
+	}
+	if ( '' !== $popover_bg_color_final ) {
+		$root_custom_props['--ipb-popover-bg-color'] = $popover_bg_color_final;
+	}
+	if ( '' !== $popover_text_color ) {
+		$root_custom_props['--ipb-popover-text-color'] = $popover_text_color;
+	}
+	if ( 'none' !== $popover_stroke_width ) {
+		$root_custom_props['--ipb-popover-stroke-color'] = $popover_stroke_color;
+	}
+
 	// マーカー画像の表示幅は、本体画像に対してこの割合を上限とする(editor.js / view.js の
 	// MARKER_MAX_WIDTH_RATIO と必ず一致させること)。マーカー画像が本体画像と同等以上の
 	// 解像度の場合、transform:scale() だけではレイアウト上のサイズ(当たり判定)が縮小前の
@@ -223,7 +310,7 @@ function image_pin_block_render_callback( $attributes, $content ) {
 
 	ob_start();
 	?>
-	<div class="image-pin-block" data-pc-behavior="<?php echo esc_attr( $pc_behavior ); ?>" data-mobile-behavior="<?php echo esc_attr( $mobile_behavior ); ?>">
+	<div class="image-pin-block" data-pc-behavior="<?php echo esc_attr( $pc_behavior ); ?>" data-mobile-behavior="<?php echo esc_attr( $mobile_behavior ); ?>"<?php if ( 'none' !== $label_stroke_width ) : ?> data-label-stroke-width="<?php echo esc_attr( $label_stroke_width ); ?>"<?php endif; ?><?php if ( 'none' !== $popover_stroke_width ) : ?> data-popover-stroke-width="<?php echo esc_attr( $popover_stroke_width ); ?>"<?php endif; ?><?php if ( ! empty( $root_custom_props ) ) : ?> style="<?php foreach ( $root_custom_props as $prop_name => $prop_value ) { echo esc_attr( $prop_name ) . ':' . esc_attr( $prop_value ) . ';'; } ?>"<?php endif; ?>>
 		<div class="image-pin-block__wrapper" data-natural-width="<?php echo esc_attr( $image_width ); ?>" data-label-font-size="<?php echo esc_attr( $label_font_size ); ?>">
 			<img
 				class="image-pin-block__image"
@@ -307,12 +394,24 @@ function image_pin_block_render_callback( $attributes, $content ) {
 					continue;
 				}
 				$pin_id      = sanitize_html_class( $pin['id'] );
-				$label       = isset( $pin['label'] ) && '' !== $pin['label'] ? (string) $pin['label'] : __( 'Pin', 'image-pin-block' );
+				$raw_label   = isset( $pin['label'] ) ? (string) $pin['label'] : '';
+				// マーカー画像を持つピンは、丸マーカー用の $show_marker_label(上記ループ参照)と
+				// 同じ条件でのみラベルを表示する。「ラベルを表示する」を外している、または
+				// ラベル未入力の場合は、代替文字("Pin")も含めて一切表示しない
+				// (画像の下のラベルだけ非表示で、ポップオーバー内には出る、という不整合を防ぐ)。
+				// 丸マーカーは showLabel を持たないため、常に表示する(未入力なら代替文字)。
+				$has_marker_for_desc = isset( $pin['markerImageUrl'] ) && '' !== (string) $pin['markerImageUrl'];
+				$show_desc_label = $has_marker_for_desc
+					? ( ( ! isset( $pin['showLabel'] ) || (bool) $pin['showLabel'] ) && '' !== $raw_label )
+					: true;
+				$label       = '' !== $raw_label ? $raw_label : __( 'Pin', 'image-pin-block' );
 				$description = isset( $pin['description'] ) ? (string) $pin['description'] : '';
 				$target      = isset( $pin['target'] ) ? sanitize_html_class( $pin['target'] ) : '';
 				?>
 				<template class="image-pin-block__tpl-pc" data-pin-id="<?php echo esc_attr( $pin_id ); ?>">
-					<div class="image-pin-block__desc-label"><?php echo esc_html( $label ); ?></div>
+					<?php if ( $show_desc_label ) : ?>
+						<div class="image-pin-block__desc-label"><?php echo esc_html( $label ); ?></div>
+					<?php endif; ?>
 					<div class="image-pin-block__desc-body">
 						<?php if ( $pc_needs_link && '' !== $target ) : ?>
 							<a class="image-pin-block__desc-link" href="#<?php echo esc_attr( $target ); ?>"><?php echo esc_html( $description ); ?></a>
@@ -333,12 +432,20 @@ function image_pin_block_render_callback( $attributes, $content ) {
 				continue;
 			}
 			$pin_id      = sanitize_html_class( $pin['id'] );
-			$label       = isset( $pin['label'] ) && '' !== $pin['label'] ? (string) $pin['label'] : __( 'Pin', 'image-pin-block' );
+			$raw_label   = isset( $pin['label'] ) ? (string) $pin['label'] : '';
+			// PC用テンプレートと同じ理由で、マーカー画像ピンの showLabel/未入力を反映する。
+			$has_marker_for_desc = isset( $pin['markerImageUrl'] ) && '' !== (string) $pin['markerImageUrl'];
+			$show_desc_label = $has_marker_for_desc
+				? ( ( ! isset( $pin['showLabel'] ) || (bool) $pin['showLabel'] ) && '' !== $raw_label )
+				: true;
+			$label       = '' !== $raw_label ? $raw_label : __( 'Pin', 'image-pin-block' );
 			$description = isset( $pin['description'] ) ? (string) $pin['description'] : '';
 			$target      = isset( $pin['target'] ) ? sanitize_html_class( $pin['target'] ) : '';
 			?>
 			<template class="image-pin-block__tpl-mobile" data-pin-id="<?php echo esc_attr( $pin_id ); ?>">
-				<div class="image-pin-block__desc-label"><?php echo esc_html( $label ); ?></div>
+				<?php if ( $show_desc_label ) : ?>
+					<div class="image-pin-block__desc-label"><?php echo esc_html( $label ); ?></div>
+				<?php endif; ?>
 				<div class="image-pin-block__desc-body">
 					<?php if ( $mobile_needs_link && '' !== $target ) : ?>
 						<a class="image-pin-block__desc-link" href="#<?php echo esc_attr( $target ); ?>"><?php echo esc_html( $description ); ?></a>

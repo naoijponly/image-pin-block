@@ -67,6 +67,57 @@
 			"Label text color": [
 				"ラベルの文字色"
 			],
+			"Pin label": [
+				"ピンラベル"
+			],
+			"Label background opacity": [
+				"ラベル背景の不透明度"
+			],
+			"Label stroke color": [
+				"ラベルの縁取り色"
+			],
+			"Label stroke width": [
+				"ラベルの縁取りの太さ"
+			],
+			"None": [
+				"なし"
+			],
+			"Thin": [
+				"細い"
+			],
+			"Normal": [
+				"普通"
+			],
+			"Thick": [
+				"太い"
+			],
+			"Popover": [
+				"ポップオーバー"
+			],
+			"Popover background color": [
+				"ポップオーバーの背景色"
+			],
+			"Popover background opacity": [
+				"ポップオーバー背景の不透明度"
+			],
+			"Popover text color": [
+				"ポップオーバーの文字色"
+			],
+			"Popover stroke color": [
+				"ポップオーバーの縁取り色"
+			],
+			"Popover stroke width": [
+				"ポップオーバーの縁取りの太さ"
+			],
+			"Reset": [
+				"リセット"
+			],
+			"How to use": [
+				"使い方"
+			],
+			"This section explains the basic usage.": [
+				"この見本テキストで、設定した見た目を確認できます。"
+			],
 			"Pin settings": [
 				"ピン設定"
 			],

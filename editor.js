@@ -15,6 +15,9 @@
 	var TextareaControl = components.TextareaControl;
 	var SelectControl = components.SelectControl;
 	var CheckboxControl = components.CheckboxControl;
+	var RangeControl = components.RangeControl;
+	var Dropdown = components.Dropdown;
+	var ColorPicker = components.ColorPicker;
 	var useSelect = data.useSelect;
 	var __ = i18n.__;
 
@@ -57,6 +60,19 @@
 	var MARKER_RESIZE_HANDLE_MIN_PX = 8;
 	var MARKER_RESIZE_HANDLE_MAX_PX = 18;
 
+	// ラベル背景の不透明度(0〜100)。デフォルト100(=変更なし)。
+	var DEFAULT_BG_OPACITY = 100;
+	// 縁取り色のデフォルト。太さが 'none' のときは実際には使われない。
+	var DEFAULT_STROKE_COLOR = '#ffffff';
+	var STROKE_WIDTHS = [ 'none', 'thin', 'normal', 'thick' ];
+	var DEFAULT_STROKE_WIDTH = 'none';
+	// 縁取りの太さ(列挙値)→px の対応。image-pin-block.php / style.css の
+	// data-label-stroke-width / data-popover-stroke-width の対応表と必ず一致させること。
+	var STROKE_WIDTH_PX = { none: 0, thin: 1, normal: 2, thick: 3 };
+	// ポップオーバーの背景色が未設定のときに、不透明度の計算に使う実効的な基準色。
+	// style.css の .image-pin-block__popover の既定背景(#fff)と必ず一致させること。
+	var DEFAULT_POPOVER_BG_BASE = '#ffffff';
+
 	function clampToRange( n, min, max ) {
 		return Math.min( max, Math.max( min, n ) );
 	}
@@ -66,6 +82,36 @@
 		return ( pin.markerScale && pin.markerScale >= MARKER_SCALE_MIN && pin.markerScale <= MARKER_SCALE_MAX )
 			? pin.markerScale
 			: DEFAULT_MARKER_SCALE;
+	}
+
+	// 色(hex/rgb/rgba/hsl/hsla/CSS標準色名のいずれでもよい)に不透明度(0〜100)を
+	// 掛け合わせた最終的な色を返す。image-pin-block.php の image_pin_block_apply_opacity()
+	// と同じ考え方: color-mix(in srgb, color pct%, transparent) で color を pct% だけ
+	// transparent と混ぜる。相対カラー構文(rgb(from ...))は対応ブラウザが狭く
+	// (Firefox 128+ 必須)、未対応環境で宣言ごと無効になり背景が消えてしまうため不採用。
+	// opacityPct が100(既定・変更なし)のときは color をそのまま返す(color-mixで包まない)。
+	function applyOpacityToColor( color, opacityPct ) {
+		var pct = clampToRange( opacityPct, 0, 100 );
+		if ( 100 === pct ) {
+			return color;
+		}
+		var pctStr = pct.toFixed( 3 );
+		return 'color-mix(in srgb, ' + color + ' ' + pctStr + '%, transparent)';
+	}
+
+	// 縁取りの太さ・色から、テキストの縁取り用インラインstyleを組み立てる。
+	// 太さが 'none'(=0px)のときは何もプロパティを含まないオブジェクトを返す
+	// (-webkit-text-stroke を一切出力しない)。paint-order は必ず併記する
+	// (省略すると縁取りが字の内側に食い込み、細い書体の字形が潰れるため)。
+	function buildStrokeStyle( widthKey, colorValue ) {
+		var px = STROKE_WIDTH_PX[ widthKey ] || 0;
+		if ( px <= 0 ) {
+			return {};
+		}
+		return {
+			WebkitTextStroke: px + 'px ' + colorValue,
+			paintOrder: 'stroke fill'
+		};
 	}
 
 	function generatePinId( pins ) {
@@ -162,11 +208,14 @@
 	function buildPinContent( pin, display, isSelected ) {
 		var ratio = display.widthRatio || 1;
 		var hasLabelText = !! ( pin.label && '' !== pin.label );
-		var labelStyle = {
-			backgroundColor: display.labelBackgroundColor,
-			color: display.labelTextColor,
-			fontSize: ( display.labelFontSize * ratio ) + 'px'
-		};
+		var labelStyle = Object.assign(
+			{
+				backgroundColor: applyOpacityToColor( display.labelBackgroundColor, display.labelBackgroundOpacity ),
+				color: display.labelTextColor,
+				fontSize: ( display.labelFontSize * ratio ) + 'px'
+			},
+			buildStrokeStyle( display.labelStrokeWidth, display.labelStrokeColor )
+		);
 
 		if ( pin.markerImageUrl ) {
 			var scale = resolveMarkerScale( pin );
@@ -300,6 +349,78 @@
 		} );
 	}
 
+	// 縁取りの太さの選択肢。image-pin-block.php / style.css の列挙値と必ず一致させること。
+	var STROKE_WIDTH_OPTIONS = [
+		{ value: 'none', label: __( 'None', 'image-pin-block' ) },
+		{ value: 'thin', label: __( 'Thin', 'image-pin-block' ) },
+		{ value: 'normal', label: __( 'Normal', 'image-pin-block' ) },
+		{ value: 'thick', label: __( 'Thick', 'image-pin-block' ) }
+	];
+
+	// 色1つ分の設定行: スウォッチボタン(クリックでカラーピッカーをポップオーバー表示)+ラベル。
+	// labelBackgroundColor 等、既存の rgba() 値を保持し得る属性にも対応するため、
+	// (PanelColorSettings ではなく)フルの ColorPicker を Dropdown に包んで使う
+	// (ネイティブの <input type="color"> は hex専用で rgba() を表示できないため不採用)。
+	// allowEmpty: true の場合、値が空でなければ「リセット」ボタンで空文字に戻せる
+	// (popoverBackgroundColor/popoverTextColor の「未設定=継承」に戻すため)。
+	function ColorInputRow( props ) {
+		var currentColor = props.value || '';
+		return el(
+			'div',
+			{ className: 'image-pin-block-editor__color-row' },
+			el( Dropdown, {
+				className: 'image-pin-block-editor__color-dropdown',
+				contentClassName: 'image-pin-block-editor__color-dropdown-content',
+				renderToggle: function( toggleProps ) {
+					return el(
+						Button,
+						{
+							onClick: toggleProps.onToggle,
+							'aria-expanded': toggleProps.isOpen,
+							className: 'image-pin-block-editor__color-swatch-button'
+						},
+						el( 'span', {
+							className: 'image-pin-block-editor__color-swatch',
+							style: { backgroundColor: currentColor || 'transparent' }
+						} ),
+						props.label
+					);
+				},
+				renderContent: function() {
+					return el( ColorPicker, {
+						color: currentColor || undefined,
+						onChange: function( color ) { props.onChange( color ); },
+						enableAlpha: !! props.enableAlpha
+					} );
+				}
+			} ),
+			( props.allowEmpty && currentColor )
+				? el( Button, { variant: 'link', onClick: function() { props.onChange( '' ); } }, __( 'Reset', 'image-pin-block' ) )
+				: null
+		);
+	}
+
+	// 「ポップオーバー」パネル用の見本プレビュー。編集画面にはポップオーバーの実インスタンスが
+	// 無い(ホバー表示のシミュレーションをしていない)ため、設定内容を反映した静的な見本を
+	// パネル内に表示することでライブプレビューの代わりとする。
+	function PopoverPreview( props ) {
+		var s = props.settings;
+		var bgBase = s.backgroundColor || DEFAULT_POPOVER_BG_BASE;
+		var previewStyle = Object.assign(
+			{
+				backgroundColor: applyOpacityToColor( bgBase, s.backgroundOpacity ),
+				color: s.textColor || undefined
+			},
+			buildStrokeStyle( s.strokeWidth, s.strokeColor )
+		);
+		return el(
+			'div',
+			{ className: 'image-pin-block-editor__popover-preview', style: previewStyle },
+			el( 'div', { className: 'image-pin-block-editor__popover-preview-label' }, __( 'How to use', 'image-pin-block' ) ),
+			el( 'div', { className: 'image-pin-block-editor__popover-preview-body' }, __( 'This section explains the basic usage.', 'image-pin-block' ) )
+		);
+	}
+
 	function Edit( props ) {
 		var attributes = props.attributes;
 		var setAttributes = props.setAttributes;
@@ -316,7 +437,29 @@
 			labelFontSize: ( attributes.labelFontSize && attributes.labelFontSize >= LABEL_FONT_SIZE_MIN && attributes.labelFontSize <= LABEL_FONT_SIZE_MAX )
 				? attributes.labelFontSize
 				: DEFAULT_LABEL_FONT_SIZE,
+			labelBackgroundOpacity: ( typeof attributes.labelBackgroundOpacity === 'number' && attributes.labelBackgroundOpacity >= 0 && attributes.labelBackgroundOpacity <= 100 )
+				? attributes.labelBackgroundOpacity
+				: DEFAULT_BG_OPACITY,
+			labelStrokeColor: attributes.labelStrokeColor || DEFAULT_STROKE_COLOR,
+			labelStrokeWidth: ( STROKE_WIDTHS.indexOf( attributes.labelStrokeWidth ) !== -1 )
+				? attributes.labelStrokeWidth
+				: DEFAULT_STROKE_WIDTH,
 			mainImageWidth: attributes.imageWidth || 0
+		};
+
+		// ポップオーバー(PC用吹き出し・スマホの説明エリア共通)の見た目設定。
+		// backgroundColor/textColor は空文字が「未設定=継承」を表すセンチネル値
+		// (image-pin-block.php と同じ扱い)。
+		var popoverSettings = {
+			backgroundColor: attributes.popoverBackgroundColor || '',
+			backgroundOpacity: ( typeof attributes.popoverBackgroundOpacity === 'number' && attributes.popoverBackgroundOpacity >= 0 && attributes.popoverBackgroundOpacity <= 100 )
+				? attributes.popoverBackgroundOpacity
+				: DEFAULT_BG_OPACITY,
+			textColor: attributes.popoverTextColor || '',
+			strokeColor: attributes.popoverStrokeColor || DEFAULT_STROKE_COLOR,
+			strokeWidth: ( STROKE_WIDTHS.indexOf( attributes.popoverStrokeWidth ) !== -1 )
+				? attributes.popoverStrokeWidth
+				: DEFAULT_STROKE_WIDTH
 		};
 
 		var selectedState = useState( null );
@@ -827,20 +970,84 @@
 							value: displaySettings.pinColor,
 							onChange: function( color ) { setAttributes( { pinColor: color || DEFAULT_PIN_COLOR } ); },
 							label: __( 'Pin color (round marker only)', 'image-pin-block' )
-						},
-						{
-							value: displaySettings.labelBackgroundColor,
-							onChange: function( color ) { setAttributes( { labelBackgroundColor: color || DEFAULT_LABEL_BG_COLOR } ); },
-							label: __( 'Label background color', 'image-pin-block' )
-						},
-						{
-							value: displaySettings.labelTextColor,
-							onChange: function( color ) { setAttributes( { labelTextColor: color || DEFAULT_LABEL_TEXT_COLOR } ); },
-							label: __( 'Label text color', 'image-pin-block' )
 						}
 					]
 				} )
 				: null,
+			el(
+				PanelBody,
+				{ title: __( 'Pin label', 'image-pin-block' ), initialOpen: false },
+				el( ColorInputRow, {
+					label: __( 'Label background color', 'image-pin-block' ),
+					value: displaySettings.labelBackgroundColor,
+					// 既定値が rgba() のため、ピッカー自体でもアルファを編集できるようにする
+					// (背景の不透明度スライダーとは別に、色そのものに透明度を持たせたい場合のため)。
+					enableAlpha: true,
+					onChange: function( color ) { setAttributes( { labelBackgroundColor: color || DEFAULT_LABEL_BG_COLOR } ); }
+				} ),
+				el( RangeControl, {
+					label: __( 'Label background opacity', 'image-pin-block' ),
+					value: displaySettings.labelBackgroundOpacity,
+					min: 0,
+					max: 100,
+					onChange: function( value ) {
+						setAttributes( { labelBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
+					}
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Label text color', 'image-pin-block' ),
+					value: displaySettings.labelTextColor,
+					onChange: function( color ) { setAttributes( { labelTextColor: color || DEFAULT_LABEL_TEXT_COLOR } ); }
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Label stroke color', 'image-pin-block' ),
+					value: displaySettings.labelStrokeColor,
+					onChange: function( color ) { setAttributes( { labelStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
+				} ),
+				el( SelectControl, {
+					label: __( 'Label stroke width', 'image-pin-block' ),
+					value: displaySettings.labelStrokeWidth,
+					options: STROKE_WIDTH_OPTIONS,
+					onChange: function( value ) { setAttributes( { labelStrokeWidth: value } ); }
+				} )
+			),
+			el(
+				PanelBody,
+				{ title: __( 'Popover', 'image-pin-block' ), initialOpen: false },
+				el( ColorInputRow, {
+					label: __( 'Popover background color', 'image-pin-block' ),
+					value: popoverSettings.backgroundColor,
+					allowEmpty: true,
+					onChange: function( color ) { setAttributes( { popoverBackgroundColor: color || '' } ); }
+				} ),
+				el( RangeControl, {
+					label: __( 'Popover background opacity', 'image-pin-block' ),
+					value: popoverSettings.backgroundOpacity,
+					min: 0,
+					max: 100,
+					onChange: function( value ) {
+						setAttributes( { popoverBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
+					}
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Popover text color', 'image-pin-block' ),
+					value: popoverSettings.textColor,
+					allowEmpty: true,
+					onChange: function( color ) { setAttributes( { popoverTextColor: color || '' } ); }
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Popover stroke color', 'image-pin-block' ),
+					value: popoverSettings.strokeColor,
+					onChange: function( color ) { setAttributes( { popoverStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
+				} ),
+				el( SelectControl, {
+					label: __( 'Popover stroke width', 'image-pin-block' ),
+					value: popoverSettings.strokeWidth,
+					options: STROKE_WIDTH_OPTIONS,
+					onChange: function( value ) { setAttributes( { popoverStrokeWidth: value } ); }
+				} ),
+				el( PopoverPreview, { settings: popoverSettings } )
+			),
 			selectedPin
 				? el(
 					PanelBody,
@@ -1066,6 +1273,15 @@
 			labelBackgroundColor: { type: 'string', default: DEFAULT_LABEL_BG_COLOR },
 			labelTextColor: { type: 'string', default: DEFAULT_LABEL_TEXT_COLOR },
 			labelFontSize: { type: 'number', default: 0 },
+			labelBackgroundOpacity: { type: 'number', default: DEFAULT_BG_OPACITY },
+			labelStrokeColor: { type: 'string', default: DEFAULT_STROKE_COLOR },
+			labelStrokeWidth: { type: 'string', default: DEFAULT_STROKE_WIDTH },
+			// 空文字は「未設定=現行の見た目(白背景・テーマの文字色継承)を維持する」センチネル値。
+			popoverBackgroundColor: { type: 'string', default: '' },
+			popoverBackgroundOpacity: { type: 'number', default: DEFAULT_BG_OPACITY },
+			popoverTextColor: { type: 'string', default: '' },
+			popoverStrokeColor: { type: 'string', default: DEFAULT_STROKE_COLOR },
+			popoverStrokeWidth: { type: 'string', default: DEFAULT_STROKE_WIDTH },
 			pins: { type: 'array', default: [] }
 		},
 		edit: Edit,

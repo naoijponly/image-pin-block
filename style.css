@@ -87,12 +87,35 @@
 	border-radius: 3px;
 	white-space: nowrap;
 	pointer-events: none;
+	/* 縁取り(--ipb-label-stroke-width)は下の data-label-stroke-width ルールで
+	   pxに変換される。未設定時は 0px にフォールバックし、縁取りなしになる。
+	   paint-order は必ず併記すること(省略すると縁取りが字の内側に食い込み、
+	   細い書体の字形が潰れる)。 */
+	-webkit-text-stroke: var(--ipb-label-stroke-width, 0px) var(--ipb-label-stroke-color, transparent);
+	paint-order: stroke fill;
 }
 
+/* 縁取りの太さ(列挙値)をpxに変換する。'none'(既定)のときは data-label-stroke-width
+   属性自体が出力されないため、上の 0px フォールバックのまま(縁取りなし)になる。 */
+.image-pin-block[data-label-stroke-width="thin"] .image-pin-block__pin-label {
+	--ipb-label-stroke-width: 1px;
+}
+
+.image-pin-block[data-label-stroke-width="normal"] .image-pin-block__pin-label {
+	--ipb-label-stroke-width: 2px;
+}
+
+.image-pin-block[data-label-stroke-width="thick"] .image-pin-block__pin-label {
+	--ipb-label-stroke-width: 3px;
+}
+
+/* 背景色・文字色・縁取りは、未設定時は既存の見た目(白背景・テーマの文字色継承・
+   縁取りなし)のままになるよう var() のフォールバックを既存値に合わせている。 */
 .image-pin-block__popover {
 	position: absolute;
 	max-width: 260px;
-	background: #fff;
+	background: var(--ipb-popover-bg-color, #fff);
+	color: var(--ipb-popover-text-color, inherit);
 	border: 1px solid #ddd;
 	border-radius: 6px;
 	padding: 10px 12px;
@@ -100,6 +123,8 @@
 	z-index: 10;
 	font-size: 0.9em;
 	line-height: 1.6;
+	-webkit-text-stroke: var(--ipb-popover-stroke-width, 0px) var(--ipb-popover-stroke-color, transparent);
+	paint-order: stroke fill;
 }
 
 .image-pin-block__popover[hidden] {
@@ -117,13 +142,34 @@
 	display: block;
 }
 
+/* ポップオーバーと同じ4項目(背景不透明度・文字色・縁取り色・縁取り太さ)を
+   スマホの説明エリアにも適用する(PC/スマホで同じ説明内容を出し分けているだけのため)。
+   未設定時のフォールバックは、それぞれの既存デフォルト値(#f9f9f9・テーマ継承・縁取りなし)。 */
 .image-pin-block__mobile-panel {
 	display: none;
 	margin-top: 12px;
 	padding: 12px;
 	border: 1px solid #ddd;
 	border-radius: 6px;
-	background: #f9f9f9;
+	background: var(--ipb-popover-bg-color, #f9f9f9);
+	color: var(--ipb-popover-text-color, inherit);
+	-webkit-text-stroke: var(--ipb-popover-stroke-width, 0px) var(--ipb-popover-stroke-color, transparent);
+	paint-order: stroke fill;
+}
+
+.image-pin-block[data-popover-stroke-width="thin"] .image-pin-block__popover,
+.image-pin-block[data-popover-stroke-width="thin"] .image-pin-block__mobile-panel {
+	--ipb-popover-stroke-width: 1px;
+}
+
+.image-pin-block[data-popover-stroke-width="normal"] .image-pin-block__popover,
+.image-pin-block[data-popover-stroke-width="normal"] .image-pin-block__mobile-panel {
+	--ipb-popover-stroke-width: 2px;
+}
+
+.image-pin-block[data-popover-stroke-width="thick"] .image-pin-block__popover,
+.image-pin-block[data-popover-stroke-width="thick"] .image-pin-block__mobile-panel {
+	--ipb-popover-stroke-width: 3px;
 }
 
 .image-pin-block__mobile-panel[hidden] {
