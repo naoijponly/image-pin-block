@@ -1387,7 +1387,21 @@
 
 		// 選択中のピンのポップオーバーを、現在の「ポップオーバー」設定を反映した状態で
 		// 実画像の上に表示する(CanvasPopoverPreview 参照)。
-		var canvasPopoverElement = selectedPin
+		//
+		// props.isSelected(このブロック自体が選択されているか)も条件に加える理由:
+		// selectedPinId はピン削除時にしかクリアされないため、selectedPin の有無だけで
+		// 判定すると、ブロックの選択が外れた後(他のブロックを選択した/画像の外をクリック
+		// してブロックが非選択になった等)もプレビューが表示され続けてしまう。
+		// 「Pin settings」パネル(InspectorControls内)は、WordPress自身がブロック選択中
+		// のみ表示する仕組み(Slot/Fill)に乗っているため同じ問題が起きないが、こちらは
+		// InspectorControlsの外(ブロック自身のキャンバス出力)に描画しているため、
+		// 同等の判定をこちらで明示的に行う必要がある。
+		//
+		// 「ここにピンを追加」メニューが使っている「wrapperRef外クリックで閉じる」方式は
+		// 採用しない。サイドバーの色・不透明度コントロールはDOM上wrapperRefの外にあるため、
+		// その方式だとコントロール操作中にプレビューが消えてしまい、ライブプレビューとして
+		// 機能しなくなる。isSelectedはサイドバー操作中も真のままなのでこの問題が起きない。
+		var canvasPopoverElement = ( props.isSelected && selectedPin )
 			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: canvasPopoverSettings } )
 			: null;
 
