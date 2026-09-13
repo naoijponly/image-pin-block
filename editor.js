@@ -842,6 +842,22 @@
 			};
 		}, [ pendingMenu ] );
 
+		// 上記の「画像の外へのクリックで閉じる」だけでは拾いきれないケースを補う。
+		// ブロックエディタの投稿本文キャンバスはWordPress 5.9以降 iframe 内に描画されており、
+		// 上記の document は iframe内のdocumentのため、iframeの外側(ページの余白など、
+		// 管理画面本体側)のクリックはそもそもこのリスナーに届かない。ブロックの選択状態
+		// (props.isSelected)はWordPress本体のストアがiframeの内外を問わず管理しているため、
+		// これが false になった時点でもメニューを閉じるようにし、隙間を補う。
+		// 既存の「画像の外へのクリックで閉じる」仕組みとは競合しない(同じブロックを選択した
+		// ままの操作ではisSelectedは変化しない。ブロックを選択し直す1回のクリックでメニューを
+		// 開く場合も、選択とメニュー表示は同一クリック内でまとめて反映されるため、開いた直後に
+		// このeffectが誤って閉じることはない)。
+		useEffect( function() {
+			if ( ! props.isSelected ) {
+				setPendingMenu( null );
+			}
+		}, [ props.isSelected ] );
+
 		function updatePins( nextPins ) {
 			setAttributes( { pins: nextPins } );
 		}
@@ -867,7 +883,10 @@
 		}
 
 		// 画像上の「何もない場所」をクリック → その位置に「ここにピンを追加」メニューを表示する。
-		// (ピン自体のクリックは stopPropagation されているため、ここには来ない)
+		// (ピン自体のクリック・ドラッグ、メニュー自体のクリックは stopPropagation されているため、
+		// ここに来るのは常に「ピン・ドラッグ・メニュー操作のいずれでもないクリック」のみ)。
+		// このクリックは、選択中のピンがあればその作業を終えたという意思表示とみなし、
+		// 選択も解除する(ポップオーバーのプレビューも連動して消える)。
 		function handleWrapperClick( evt ) {
 			var wrapperEl = wrapperRef.current;
 			var point = pointFromEvent( evt, wrapperEl );
@@ -875,6 +894,7 @@
 				return;
 			}
 			var pixel = pixelPointFromEvent( evt, wrapperEl );
+			setSelectedPinId( null );
 			setPendingMenu( {
 				x: point.x,
 				y: point.y,
