@@ -112,11 +112,8 @@
 			"Reset": [
 				"リセット"
 			],
-			"How to use": [
-				"使い方"
-			],
-			"This section explains the basic usage.": [
-				"この見本テキストで、設定した見た目を確認できます。"
+			"Select a pin on the image to preview its popover with these settings.": [
+				"画像上のピンを選択すると、この設定を反映したポップオーバーをプレビューできます。"
 			],
 			"Pin settings": [
 				"ピン設定"

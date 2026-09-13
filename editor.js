@@ -400,24 +400,43 @@
 		);
 	}
 
-	// 「ポップオーバー」パネル用の見本プレビュー。編集画面にはポップオーバーの実インスタンスが
-	// 無い(ホバー表示のシミュレーションをしていない)ため、設定内容を反映した静的な見本を
-	// パネル内に表示することでライブプレビューの代わりとする。
-	function PopoverPreview( props ) {
-		var s = props.settings;
+	// 選択中のピンの実際のラベル/説明文を、現在の「ポップオーバー」設定(背景の不透明度・
+	// 文字色・縁取り)を適用して、キャンバス上の実画像の上に表示する。「背景を透過させたときに
+	// 実画像の上でどう見えるか」を確認する目的のため、パネル内の静的な見本ではなく、
+	// wrapper 内に実際のポップオーバーと同じ考え方で描画する(こちらはエディタ限定の表示で、
+	// render_callback の出力には一切影響しない)。
+	//
+	// 表示位置はピンの選択中は常時表示とする(丸マーカーのピン設定パネルと同じ「選択中は
+	// 表示され続ける」挙動に合わせているため、既存のピンの選択・ドラッグ移動ロジックに
+	// 一切手を加えずに済む。詳細は docs/DATA_LAYOUT.md 参照)。
+	// ピンの%座標が画面のどちら寄りかに応じて、ポップオーバーがラベルの反対側(はみ出し
+	// にくい側)に出るよう transform の基準点を切り替える。
+	function CanvasPopoverPreview( props ) {
+		var pin = props.pin;
+		var s = props.popoverSettings;
+		var hasMarker = !! pin.markerImageUrl;
+		var showLabel = hasMarker ? ( pin.showLabel !== false && !! pin.label ) : true;
+		var labelText = pin.label || __( 'Pin', 'image-pin-block' );
+
 		var bgBase = s.backgroundColor || DEFAULT_POPOVER_BG_BASE;
-		var previewStyle = Object.assign(
+		var boxStyle = Object.assign(
 			{
 				backgroundColor: applyOpacityToColor( bgBase, s.backgroundOpacity ),
-				color: s.textColor || undefined
+				color: s.textColor || undefined,
+				left: clampPercent( pin.x ) + '%',
+				top: clampPercent( pin.y ) + '%',
+				transform: 'translate(' + ( pin.x > 60 ? 'calc(-100% - 12px)' : '12px' ) + ', ' + ( pin.y < 25 ? '12px' : 'calc(-100% - 12px)' ) + ')'
 			},
 			buildStrokeStyle( s.strokeWidth, s.strokeColor )
 		);
+
 		return el(
 			'div',
-			{ className: 'image-pin-block-editor__popover-preview', style: previewStyle },
-			el( 'div', { className: 'image-pin-block-editor__popover-preview-label' }, __( 'How to use', 'image-pin-block' ) ),
-			el( 'div', { className: 'image-pin-block-editor__popover-preview-body' }, __( 'This section explains the basic usage.', 'image-pin-block' ) )
+			{ className: 'image-pin-block-editor__canvas-popover', style: boxStyle },
+			showLabel
+				? el( 'div', { className: 'image-pin-block-editor__canvas-popover-label' }, labelText )
+				: null,
+			el( 'div', { className: 'image-pin-block-editor__canvas-popover-body' }, pin.description || '' )
 		);
 	}
 
@@ -1046,7 +1065,7 @@
 					options: STROKE_WIDTH_OPTIONS,
 					onChange: function( value ) { setAttributes( { popoverStrokeWidth: value } ); }
 				} ),
-				el( PopoverPreview, { settings: popoverSettings } )
+				el( 'p', { className: 'image-pin-block-editor__popover-preview-hint' }, __( 'Select a pin on the image to preview its popover with these settings.', 'image-pin-block' ) )
 			),
 			selectedPin
 				? el(
@@ -1216,6 +1235,12 @@
 			)
 			: null;
 
+		// 選択中のピンのポップオーバーを、現在の「ポップオーバー」設定を反映した状態で
+		// 実画像の上に表示する(CanvasPopoverPreview 参照)。
+		var canvasPopoverElement = selectedPin
+			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: popoverSettings } )
+			: null;
+
 		return el(
 			'div',
 			blockProps,
@@ -1233,7 +1258,8 @@
 					alt: ''
 				} ),
 				pinElements,
-				menuElement
+				menuElement,
+				canvasPopoverElement
 			),
 			el(
 				MediaUploadCheck,

@@ -154,21 +154,33 @@
 	background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
 
-/* 「ポップオーバー」パネル内の見本プレビュー。実際の .image-pin-block__popover とは
-   別要素・別クラスだが、背景不透明度・文字色・縁取りの計算ロジック(PopoverPreview関数)は
+/* 「ポップオーバー」パネル内の案内文(実際のプレビューはキャンバス側の
+   .image-pin-block-editor__canvas-popover に表示される)。 */
+.image-pin-block-editor__popover-preview-hint {
+	font-style: italic;
+	color: #757575;
+}
+
+/* 選択中のピンのポップオーバーを、実画像の上に重ねて表示する(CanvasPopoverPreview関数)。
+   left/top はピンと同じ%座標、transform でピンの反対側にずらして表示する
+   (はみ出しにくい側を JS側で計算済み)。実際の .image-pin-block__popover とは
+   別要素・別クラスだが、背景不透明度・文字色・縁取りの計算ロジックは
    image-pin-block.php のレンダリングと同じ考え方(色+不透明度の合成、太さ'none'なら
-   縁取りを一切出力しない)を用いている。 */
-.image-pin-block-editor__popover-preview {
+   縁取りを一切出力しない)を用いている。render_callback の出力には一切影響しない。 */
+.image-pin-block-editor__canvas-popover {
+	position: absolute;
 	max-width: 260px;
 	border: 1px solid #ddd;
 	border-radius: 6px;
 	padding: 10px 12px;
+	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
 	font-size: 0.9em;
 	line-height: 1.6;
-	margin-top: 8px;
+	z-index: 10;
+	pointer-events: none;
 }
 
-.image-pin-block-editor__popover-preview-label {
+.image-pin-block-editor__canvas-popover-label {
 	font-weight: bold;
 	margin-bottom: 4px;
 }
