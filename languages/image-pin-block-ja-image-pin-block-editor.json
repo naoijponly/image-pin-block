@@ -178,8 +178,11 @@
 			"Show entire image": [
 				"全体を表示する"
 			],
-			"Click the image to add a pin.": [
-				"画像をクリックしてピンを追加してください。"
+			"Double-click the image to add a pin, or use the + button.": [
+				"画像をダブルクリックするか、＋ボタンでピンを追加してください。"
+			],
+			"Image Pin Block": [
+				"画像ピンブロック"
 			],
 			"Pin content": [
 				"ピンの内容"

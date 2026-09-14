@@ -174,6 +174,15 @@
 		return tpl.content.cloneNode( true );
 	}
 
+	// Descriptionが空のピンは、PHP側(image-pin-block.php)がPopover/Mobile説明パネル用の
+	// <template>自体を出力しない(260918〜)。cloneTemplateContent()を実際に呼ぶ前に
+	// この存在確認だけを行うための軽量ヘルパー(260920〜。tap-tap/tap-link/click-linkの
+	// 「Descriptionが空だと説明を開く処理がopenPinIdを更新できず、targetへ永久に
+	// 辿り着けなくなる」不具合の修正に使う。下記参照)。
+	function templateExistsForPin( root, selector, pinId ) {
+		return !! root.querySelector( selector + '[data-pin-id="' + cssEscape( pinId ) + '"]' );
+	}
+
 	// DOM変更(高さが変わるレイアウト変更など)の直後にスクロールを開始すると、
 	// 変更前の高さを基準に着地位置が計算され、ずれることがある
 	// (モバイルの「1回目タップで説明/2回目タップで遷移」で、説明エリアを閉じるのと
@@ -784,7 +793,16 @@
 						scrollToTarget( targetId );
 						return;
 					}
+					// Descriptionが空のピンは説明パネル用の<template>自体が無く、
+					// openMobilePanelForPin()が何もしないままopenPinIdも更新しないため、
+					// 以下のtap-tap/tap-linkの分岐へ進むとtargetへ永久に辿り着けなくなる
+					// (260920〜修正)。この場合はtap-jumpと同じ「即target」に倒す。
+					var hasMobileContent = templateExistsForPin( root, '.image-pin-block__tpl-mobile', pinId );
 					if ( mobileBehavior === 'tap-tap' ) {
+						if ( ! hasMobileContent ) {
+							scrollToTarget( targetId );
+							return;
+						}
 						if ( openPinId === pinId ) {
 							// 説明エリアを閉じるとページの高さが変わる(画像の直下に
 							// ブロック要素として挿入されているため)。閉じるのとスクロールが
@@ -800,6 +818,10 @@
 						return;
 					}
 					if ( mobileBehavior === 'tap-link' ) {
+						if ( ! hasMobileContent ) {
+							scrollToTarget( targetId );
+							return;
+						}
 						openMobilePanelForPin( pinEl );
 						return;
 					}
@@ -811,6 +833,13 @@
 					return;
 				}
 				if ( pcBehavior === 'click-link' ) {
+					// 同上(260920〜): Descriptionが空だとPC用Popoverの<template>も無く、
+					// openPopoverForPin()がopenPinIdを更新できないままになるため、
+					// targetへ辿り着けなくなる不具合を修正する。
+					if ( ! templateExistsForPin( root, '.image-pin-block__tpl-pc', pinId ) ) {
+						scrollToTarget( targetId );
+						return;
+					}
 					if ( openPinId === pinId ) {
 						closePopover();
 					} else {

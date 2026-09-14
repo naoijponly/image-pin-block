@@ -2983,7 +2983,7 @@
 							: null
 					)
 				)
-				: el( 'p', { className: 'image-pin-block-editor__modal-individual-empty' }, __( 'Click the image to add a pin.', 'image-pin-block' ) )
+				: el( 'p', { className: 'image-pin-block-editor__modal-individual-empty' }, __( 'Double-click the image to add a pin, or use the + button.', 'image-pin-block' ) )
 			)
 		);
 
