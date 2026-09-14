@@ -3,6 +3,11 @@
 	var useState = element.useState;
 	var useRef = element.useRef;
 	var useEffect = element.useEffect;
+	// Label位置の実測(DOM measurement)をペイント前に確定させ、誤った位置が一瞬
+	// 見える(flash)のを防ぐために使う。無い環境(理論上ほぼ無い)ではuseEffectへ
+	// フォールバックする(その場合、極めて稀に1フレームだけ古い位置が見える可能性がある
+	// だけで、致命的な不具合にはならない)。
+	var useLayoutEffect = element.useLayoutEffect || useEffect;
 	var registerBlockType = blocks.registerBlockType;
 	var useBlockProps = blockEditor.useBlockProps;
 	var InspectorControls = blockEditor.InspectorControls;
@@ -81,6 +86,18 @@
 	var PAN_CLICK_THRESHOLD_PX = 5;
 	// 新規ピンを複製したとき、元のピンと重ならないようにずらす量(%)。
 	var DUPLICATE_OFFSET_PERCENT = 4;
+	// Label位置の経路(角丸矩形)関連。すべてローカル単位(Fit適用後・Zoom適用前のpx。
+	// Zoomはimage wrapper自体へのtransform: scale()で別途掛かるため、ここに含めない)。
+	// LABEL_PATH_MARGIN: Pin/Marker本体の外形から、経路(角丸矩形)を外側へ広げる量。
+	// 「本体の角を内側から削って角丸を作る」のではなく「本体より一回り大きい矩形を
+	// 角丸化する」ことで、経路がPin/Markerの四隅より必ず外側に来るようにする。
+	var LABEL_PATH_MARGIN = 6;
+	// LABEL_PATH_RADIUS: 経路の角の半径。矩形が小さい場合は幅・高さの半分でクランプする
+	// (buildRoundedRectPath側で行う)。
+	var LABEL_PATH_RADIUS = 10;
+	// LABEL_GAP: 経路(Pin/Markerの外形+LABEL_PATH_MARGIN)からLabel自身の縁までの
+	// 追加の余白。
+	var LABEL_GAP = 6;
 
 	// ラベル背景の不透明度(0〜100)。デフォルト100(=変更なし)。
 	var DEFAULT_BG_OPACITY = 100;
@@ -148,6 +165,235 @@
 	// 「画像の外」を「画像の端」に丸めてしまい、判定できないため)。
 	function isPointInsideRect( clientX, clientY, rect ) {
 		return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+	}
+
+	// ─── Label位置(角丸矩形の外周)用の純粋なジオメトリ計算 ───
+	// Pin/Markerの周囲を「辺」「角」で場合分けしない、連続した1本の経路として扱う
+	// (辺・角の状態切り替えは、境界付近でのジャンプ・震え・往復の原因になるため避ける)。
+	// editor.js・view.js の両方で同じロジックを使う(コードの共有機構が無いため、
+	// 内容を同一に保ったまま複製している。変更する場合は両方に同じ修正を適用すること)。
+	//
+	// rect(left, top, width, height, radius)の外周を、4本の直線+4つの1/4円弧から成る、
+	// 順序付きの8セグメント(直線が0になる辺・半径0の場合は該当セグメントを含めない)
+	// として表現する。各セグメントは、長さ(px)・タグ('top'/'right'/'bottom'/'left'/
+	// 'corner')・ローカル位置(0〜1)から実座標+外向き法線を返す関数・任意の点から
+	// このセグメントへの最近傍点(距離込み)を返す関数を持つ。
+	function buildRoundedRectPath( rect, radius ) {
+		var w = Math.max( 0, rect.width );
+		var h = Math.max( 0, rect.height );
+		var r = Math.max( 0, Math.min( radius, w / 2, h / 2 ) );
+		var left = rect.left;
+		var top = rect.top;
+		var right = left + w;
+		var bottom = top + h;
+		var straightW = Math.max( 0, w - 2 * r );
+		var straightH = Math.max( 0, h - 2 * r );
+
+		function lineSegment( tag, x0, y0, x1, y1, nx, ny ) {
+			var len = Math.sqrt( ( x1 - x0 ) * ( x1 - x0 ) + ( y1 - y0 ) * ( y1 - y0 ) );
+			return {
+				tag: tag,
+				length: len,
+				pointAt: function( f ) {
+					return { x: x0 + ( x1 - x0 ) * f, y: y0 + ( y1 - y0 ) * f, nx: nx, ny: ny };
+				},
+				nearest: function( px, py ) {
+					if ( len <= 0 ) {
+						return { f: 0, dist: Math.sqrt( ( px - x0 ) * ( px - x0 ) + ( py - y0 ) * ( py - y0 ) ) };
+					}
+					var t = ( ( px - x0 ) * ( x1 - x0 ) + ( py - y0 ) * ( y1 - y0 ) ) / ( len * len );
+					t = clampToRange( t, 0, 1 );
+					var qx = x0 + ( x1 - x0 ) * t;
+					var qy = y0 + ( y1 - y0 ) * t;
+					return { f: t, dist: Math.sqrt( ( px - qx ) * ( px - qx ) + ( py - qy ) * ( py - qy ) ) };
+				}
+			};
+		}
+
+		function arcSegment( cx, cy, startAngle, endAngle ) {
+			// startAngle→endAngleは常に増加方向(スクリーン座標系ではこれが時計回りになる)。
+			var sweep = endAngle - startAngle;
+			var len = Math.abs( sweep ) * r;
+			var seg = {
+				tag: 'corner',
+				length: len,
+				pointAt: function( f ) {
+					var angle = startAngle + sweep * f;
+					var nx = Math.cos( angle );
+					var ny = Math.sin( angle );
+					return { x: cx + r * nx, y: cy + r * ny, nx: nx, ny: ny };
+				},
+				nearest: function( px, py ) {
+					var angle = Math.atan2( py - cy, px - cx );
+					var twoPi = Math.PI * 2;
+					var sweepAbs = Math.abs( sweep );
+					var rel = ( ( angle - startAngle ) % twoPi + twoPi ) % twoPi;
+					var f;
+					if ( rel <= sweepAbs ) {
+						f = ( sweepAbs > 0 ) ? ( rel / sweepAbs ) : 0;
+					} else {
+						f = ( rel - sweepAbs <= twoPi - rel ) ? 1 : 0;
+					}
+					var p = seg.pointAt( f );
+					return { f: f, dist: Math.sqrt( ( px - p.x ) * ( px - p.x ) + ( py - p.y ) * ( py - p.y ) ) };
+				}
+			};
+			return seg;
+		}
+
+		var segments = [];
+		if ( straightW > 0 ) {
+			segments.push( lineSegment( 'top', left + r, top, right - r, top, 0, -1 ) );
+		}
+		if ( r > 0 ) {
+			segments.push( arcSegment( right - r, top + r, -Math.PI / 2, 0 ) );
+		}
+		if ( straightH > 0 ) {
+			segments.push( lineSegment( 'right', right, top + r, right, bottom - r, 1, 0 ) );
+		}
+		if ( r > 0 ) {
+			segments.push( arcSegment( right - r, bottom - r, 0, Math.PI / 2 ) );
+		}
+		if ( straightW > 0 ) {
+			segments.push( lineSegment( 'bottom', right - r, bottom, left + r, bottom, 0, 1 ) );
+		}
+		if ( r > 0 ) {
+			segments.push( arcSegment( left + r, bottom - r, Math.PI / 2, Math.PI ) );
+		}
+		if ( straightH > 0 ) {
+			segments.push( lineSegment( 'left', left, bottom - r, left, top + r, -1, 0 ) );
+		}
+		if ( r > 0 ) {
+			segments.push( arcSegment( left + r, top + r, Math.PI, Math.PI * 1.5 ) );
+		}
+
+		var totalLength = segments.reduce( function( sum, seg ) { return sum + seg.length; }, 0 );
+		return { segments: segments, totalLength: totalLength };
+	}
+
+	// 0以上1未満の連続値tから、経路上の実座標+外向き法線を求める。
+	function pathPointAtT( path, t ) {
+		if ( path.totalLength <= 0 || ! path.segments.length ) {
+			return { x: 0, y: 0, nx: 0, ny: -1 };
+		}
+		var tt = ( ( t % 1 ) + 1 ) % 1;
+		var s = tt * path.totalLength;
+		var offset = 0;
+		for ( var i = 0; i < path.segments.length; i++ ) {
+			var seg = path.segments[ i ];
+			var isLast = ( i === path.segments.length - 1 );
+			if ( s <= offset + seg.length || isLast ) {
+				var f = ( seg.length > 0 ) ? clampToRange( ( s - offset ) / seg.length, 0, 1 ) : 0;
+				return seg.pointAt( f );
+			}
+			offset += seg.length;
+		}
+		return path.segments[ 0 ].pointAt( 0 );
+	}
+
+	// 任意の点(px, py)に最も近い経路上の位置を、0以上1未満の連続値tとして返す。
+	// 「まずside/cornerを判定してから」ではなく、全セグメントへの最近傍点のうち
+	// 最も近いものを採用する(境界付近でのモード切り替えを発生させないため)。
+	function nearestTOnPath( path, px, py ) {
+		if ( path.totalLength <= 0 || ! path.segments.length ) {
+			return 0;
+		}
+		var bestDist = Infinity;
+		var bestS = 0;
+		var offset = 0;
+		for ( var i = 0; i < path.segments.length; i++ ) {
+			var seg = path.segments[ i ];
+			var res = seg.nearest( px, py );
+			if ( res.dist < bestDist ) {
+				bestDist = res.dist;
+				bestS = offset + res.f * seg.length;
+			}
+			offset += seg.length;
+		}
+		return ( path.totalLength > 0 ) ? ( bestS / path.totalLength ) : 0;
+	}
+
+	// 指定タグの最初のセグメントの中点にあたるtを返す(既存データにlabelPositionが
+	// 無い場合のfallback専用。丸マーカー→右、画像マーカー→下、という既存(旧v0.2.0)の
+	// 見た目に近い位置を再現する)。該当セグメントが無い(矩形が小さすぎる等)場合はnull。
+	function findSegmentMidpointT( path, tag ) {
+		var offset = 0;
+		for ( var i = 0; i < path.segments.length; i++ ) {
+			var seg = path.segments[ i ];
+			if ( seg.tag === tag ) {
+				var s = offset + seg.length / 2;
+				return ( path.totalLength > 0 ) ? ( s / path.totalLength ) : 0;
+			}
+			offset += seg.length;
+		}
+		return null;
+	}
+
+	// pinオブジェクトのlabelPositionを解決する(0以上1未満へ正規化。無効/未設定なら
+	// pin種類ごとのfallback位置を使う)。
+	function resolveLabelPosition( pin, path ) {
+		if ( typeof pin.labelPosition === 'number' && isFinite( pin.labelPosition ) ) {
+			var t = pin.labelPosition % 1;
+			if ( t < 0 ) {
+				t += 1;
+			}
+			return t;
+		}
+		var fallbackTag = pin.markerImageUrl ? 'bottom' : 'right';
+		var fallback = findSegmentMidpointT( path, fallbackTag );
+		return ( fallback !== null ) ? fallback : 0;
+	}
+
+	// Pin/Markerのローカル矩形(pinLocalRect: centerX, centerY, width, height)と、
+	// Label自身のローカルサイズ(labelLocalSize: width, height)から、Labelの
+	// 中心座標(ローカル単位)を求める。
+	//   1. pinLocalRectをLABEL_PATH_MARGIN分だけ外側へ広げ、LABEL_PATH_RADIUSで角丸化した
+	//      経路(角丸矩形)を作る(本体の角を内側から削るのではなく、外側へ拡張した矩形を
+	//      角丸化することで、経路が常にPin/Markerの外側に来るようにする)。
+	//   2. labelPosition(0〜1)から、経路上のアンカー点+外向き法線を求める。
+	//   3. Label自身の幅・高さと法線方向から、Labelの矩形がPin/Marker側へ食い込まない
+	//      よう必要な支持距離(support distance)を求める:
+	//      abs(nx)*labelWidth/2 + abs(ny)*labelHeight/2
+	//      (法線が斜め方向の角丸部分では、水平・垂直の両方の必要量が滑らかに混ざる)。
+	//   4. アンカー点から、法線方向へ(支持距離+LABEL_GAP)だけ進めた点をLabelの中心とする。
+	// pin: labelPosition解決のfallback判定(markerImageUrlの有無)に使う。
+	function computeLabelCenter( pin, pinLocalRect, labelLocalSize ) {
+		var pathRect = {
+			left: pinLocalRect.centerX - pinLocalRect.width / 2 - LABEL_PATH_MARGIN,
+			top: pinLocalRect.centerY - pinLocalRect.height / 2 - LABEL_PATH_MARGIN,
+			width: pinLocalRect.width + LABEL_PATH_MARGIN * 2,
+			height: pinLocalRect.height + LABEL_PATH_MARGIN * 2
+		};
+		var path = buildRoundedRectPath( pathRect, LABEL_PATH_RADIUS );
+		var t = resolveLabelPosition( pin, path );
+		var anchor = pathPointAtT( path, t );
+		var support = Math.abs( anchor.nx ) * ( labelLocalSize.width / 2 ) + Math.abs( anchor.ny ) * ( labelLocalSize.height / 2 );
+		var dist = support + LABEL_GAP;
+		return { x: anchor.x + anchor.nx * dist, y: anchor.y + anchor.ny * dist, path: path, t: t };
+	}
+
+	// DOM要素(el)の実際の表示矩形(getBoundingClientRect())を、wrapperEl基準の
+	// ローカル座標(zoomScaleで実画面px→ローカルpxへ変換したもの)に変換する。
+	// ローカル座標系は、wrapperEl自身の(transform適用前の)座標系(pin.x%/y%が
+	// percentFromClientPoint()等で使っているのと同じ空間)。zoomScaleは呼び出し側の
+	// 表示倍率(モーダルではmodalZoom/100、Zoomの無い文脈では1)。要素が未測定
+	// (レイアウト前・DOM未接続等)の場合はnullを返す(呼び出し側で安全にフォールバックする)。
+	function measureLocalRectRelativeTo( targetEl, wrapperEl, zoomScale ) {
+		if ( ! targetEl || ! wrapperEl ) {
+			return null;
+		}
+		var r = targetEl.getBoundingClientRect();
+		var w = wrapperEl.getBoundingClientRect();
+		if ( r.width <= 0 || r.height <= 0 ) {
+			return null;
+		}
+		var scale = ( zoomScale && zoomScale > 0 ) ? zoomScale : 1;
+		return {
+			centerX: ( r.left + r.width / 2 - w.left ) / scale,
+			centerY: ( r.top + r.height / 2 - w.top ) / scale,
+			width: r.width / scale,
+			height: r.height / scale
+		};
 	}
 
 	// markerScale が範囲外/未設定の場合のデフォルトへのフォールバックを一箇所にまとめる。
@@ -263,6 +509,21 @@
 		return percentFromClientPoint( evt.clientX, evt.clientY, wrapperEl.getBoundingClientRect() );
 	}
 
+	// ラベルのインラインstyle(背景色+不透明度・文字色・文字サイズ・縁取り)。
+	// buildPinContent(ブロック自身のキャンバス)と、モーダル内の独立配置Label(下記
+	// 「Label位置」関連の描画)の両方から使う共通処理。
+	function buildLabelStyle( display ) {
+		var ratio = display.widthRatio || 1;
+		return Object.assign(
+			{
+				backgroundColor: applyOpacityToColor( display.labelBackgroundColor, display.labelBackgroundOpacity ),
+				color: display.labelTextColor,
+				fontSize: ( display.labelFontSize * ratio ) + 'px'
+			},
+			buildStrokeStyle( display.labelStrokeWidth, display.labelStrokeColor )
+		);
+	}
+
 	// ピン内部の見た目(丸マーカー+ラベル横並び／画像マーカー+ラベル下表示)を組み立てる。
 	// 編集画面用。フロント側の見た目は image-pin-block.php 側で同じ構造を出力する。
 	// display: { pinSize, pinColor, labelBackgroundColor, labelTextColor, labelFontSize, widthRatio,
@@ -272,17 +533,13 @@
 	// モーダル内の画像編集エリアでのドラッグ移動・リサイズに使うためのもの(不要な
 	// 呼び出し側では省略可)。isSelected: 画像マーカーのリサイズハンドルを表示するかどうか。
 	// ピンのサイズ・色は丸マーカーのみに適用し、ラベルの背景色・文字色は丸マーカー・画像マーカー共通。
+	// このキャンバス用の描画(ブロック自身の表示専用キャンバスでのみ使用)は、Label位置
+	// ドラッグ機能の追加対象外(モーダル専用機能)のため、従来どおりflexでマーカー/ドット
+	// に隣接させたまま変更していない(モーダル側は buildPinVisualOnly + 独立配置Labelを使う)。
 	function buildPinContent( pin, display, isSelected ) {
 		var ratio = display.widthRatio || 1;
 		var hasLabelText = !! ( pin.label && '' !== pin.label );
-		var labelStyle = Object.assign(
-			{
-				backgroundColor: applyOpacityToColor( display.labelBackgroundColor, display.labelBackgroundOpacity ),
-				color: display.labelTextColor,
-				fontSize: ( display.labelFontSize * ratio ) + 'px'
-			},
-			buildStrokeStyle( display.labelStrokeWidth, display.labelStrokeColor )
-		);
+		var labelStyle = buildLabelStyle( display );
 
 		if ( pin.markerImageUrl ) {
 			var scale = resolveMarkerScale( pin );
@@ -386,6 +643,83 @@
 		return dotChildren;
 	}
 
+	// buildPinContent() の丸マーカー/画像マーカー描画部分だけを取り出したもの(ラベルを
+	// 含まない)。モーダル内のLabelドラッグ配置(下記「Label位置」参照)専用。
+	// Labelを独立した要素として別途配置するため、Pinコンテナ自体はマーカー/ドットの
+	// 実際の外形(+選択中の画像マーカーのリサイズハンドル)だけを含む。ブロック自身の
+	// キャンバス(表示専用)は既存のbuildPinContent()を変更せずそのまま使う(Labelは
+	// 従来どおりflexで隣接表示。この関数はモーダル専用の新規追加であり、キャンバス側の
+	// 見た目・挙動には一切影響しない)。
+	function buildPinVisualOnly( pin, display, isSelected ) {
+		var ratio = display.widthRatio || 1;
+
+		if ( pin.markerImageUrl ) {
+			var scale = resolveMarkerScale( pin );
+			var naturalW = ( display.markerNaturalWidths && display.markerNaturalWidths[ pin.id ] ) || 0;
+			var markerStyle;
+			var displayWidthPx = 0;
+			if ( naturalW > 0 ) {
+				var idealWidth = naturalW * ( scale / 100 );
+				var maxBaseWidth = ( display.mainImageWidth || 0 ) * MARKER_MAX_WIDTH_RATIO;
+				var baseWidth = ( maxBaseWidth > 0 ) ? Math.min( idealWidth, maxBaseWidth ) : idealWidth;
+				displayWidthPx = baseWidth * ratio;
+				markerStyle = { width: displayWidthPx + 'px', height: 'auto' };
+			} else {
+				markerStyle = { transform: 'scale(' + ( ( scale / 100 ) * ratio ) + ')' };
+			}
+
+			var markerImageEl = el( 'img', {
+				key: 'marker-image',
+				className: 'image-pin-block-editor__pin-marker-image',
+				src: pin.markerImageUrl,
+				alt: '',
+				style: markerStyle,
+				ref: function( node ) {
+					if ( display.registerMarkerImageRef ) {
+						display.registerMarkerImageRef( pin.id, node );
+					}
+				},
+				onLoad: function( evt ) {
+					if ( display.onMarkerImageLoad ) {
+						display.onMarkerImageLoad( pin.id, evt.target.naturalWidth || 0 );
+					}
+				}
+			} );
+
+			var handleEl = null;
+			if ( isSelected && naturalW > 0 ) {
+				var handleSize = clampToRange( displayWidthPx * MARKER_RESIZE_HANDLE_RATIO, MARKER_RESIZE_HANDLE_MIN_PX, MARKER_RESIZE_HANDLE_MAX_PX );
+				handleEl = el( 'span', {
+					key: 'marker-resize-handle',
+					className: 'image-pin-block-editor__marker-resize-handle',
+					style: { width: handleSize + 'px', height: handleSize + 'px' },
+					title: __( 'Drag to resize', 'image-pin-block' ),
+					onPointerDown: function( evt ) {
+						evt.stopPropagation();
+						if ( display.onMarkerResizePointerDown ) {
+							display.onMarkerResizePointerDown( pin.id, evt );
+						}
+					},
+					onClick: function( evt ) { evt.stopPropagation(); }
+				} );
+			}
+
+			return el(
+				'span',
+				{ className: 'image-pin-block-editor__marker-wrap' },
+				markerImageEl,
+				handleEl
+			);
+		}
+
+		var dotStyle = {
+			width: ( display.pinSize * ratio ) + 'px',
+			height: ( display.pinSize * ratio ) + 'px',
+			backgroundColor: display.pinColor
+		};
+		return el( 'span', { className: 'image-pin-block-editor__pin-dot', style: dotStyle, 'aria-hidden': 'true' } );
+	}
+
 	// ラベル横に付ける「?」ヘルプアイコン。ホバー/フォーカスしたときだけ Tooltip で
 	// 文言を表示する(常時表示だと長いヘルプ文が個別設定エリアの高さを圧迫するため、
 	// v0.2.0でこの形にした)。tabIndexを付け、キーボード操作でもフォーカスして
@@ -463,27 +797,28 @@
 	// ColorPicker の onChange はドラッグ中(グラデーション/色相バーの操作中)に高頻度で
 	// 発火する。これを毎回 setAttributes に伝えると、ドラッグ1回で undo 履歴が
 	// 100件以上積まれ、Ctrl+Z が実質使えなくなる。そのため setAttributes は
-	// 「ドラッグを離した時点」に1回だけ呼ぶ(pointerup/pointercancelで検知)。
-	// Hex/RGB/HSLのテキスト入力欄はポインタ操作を伴わないため、フォーカスが外れた
-	// とき(blur)またはEnterキーを確定のタイミングとする(ClampedNumberControlと同じ考え方)。
+	// 「適用」ボタンを押した時点に1回だけ呼ぶ(操作中はプレビューのみ更新する)。
 	//
 	// ColorPicker 自身の color プロパティには、確定済みの値(props.value)だけを渡し、
-	// ドラッグ中は一切変更しない。ColorPicker は内部で自身のドラッグ状態を保持して
+	// 操作中は一切変更しない。ColorPicker は内部で自身の操作状態を保持して
 	// 滑らかに追従するため、外側から色を追従させ直す必要はない。
 	// (経緯: @wordpress/components の ColorPicker(react-colorful ベース)は、
 	// 内部の useColorManipulation フックが持つ2つの useEffect が、キャッシュと
 	// hsva ステートの更新タイミングの食い違いにより、外部から色を再注入していなくても
-	// 自己完結した値の往復を起こしうる不具合がある。setAttributes をドラッグ確定時の
-	// 1回に絞ることで、color プロパティ自体がドラッグ中に変化しなくなるため、この
-	// 不具合の発生条件(繰り返しの外部からの色変更)が生じなくなる。詳細は
+	// 自己完結した値の往復を起こしうる不具合がある。setAttributes を「適用」ボタン
+	// クリック時の1回に絞ることで、color プロパティ自体が操作中に変化しなくなるため、
+	// この不具合の発生条件(繰り返しの外部からの色変更)が生じなくなる。詳細は
 	// docs/DATA_LAYOUT.md の「カラーピッカーの往復不具合」参照)
 	//
-	// ドラッグ中の値は onPreview で都度報告し(setAttributesは呼ばない)、
-	// キャンバス上のライブプレビューにのみ反映する。確定時に onCommit を呼ぶ。
+	// 操作中の値は onPreview で都度報告し(setAttributesは呼ばない)、キャンバス上の
+	// ライブプレビューにのみ反映する。「適用」ボタンでonCommitを呼んで確定し、
+	// Dropdownを閉じる。「閉じる」ボタンはonCommitを呼ばずDropdownを閉じるだけで、
+	// 未適用の変更は破棄される(呼び出し側のonClose経由でプレビューも確定値へ戻る。
+	// ColorInputRow参照)。
 	function ColorPickerField( props ) {
-		// コミットすべき最新値。onChangeのたびに更新するが、再レンダリングは起こさない
-		// (setStateではなくrefにする理由: これ自体はUIに表示する値ではなく、
-		// 確定時に読み出すためだけの値のため)。
+		// 「適用」時にコミットすべき最新値。onChangeのたびに更新するが、再レンダリングは
+		// 起こさない(setStateではなくrefにする理由: これ自体はUIに表示する値ではなく、
+		// 適用時に読み出すためだけの値のため)。
 		var latestValueRef = useRef( props.value );
 
 		function handleChange( color ) {
@@ -493,30 +828,35 @@
 			}
 		}
 
-		function commit() {
+		function handleApply() {
 			if ( latestValueRef.current !== props.value && props.onCommit ) {
 				props.onCommit( latestValueRef.current );
+			}
+			if ( props.onRequestClose ) {
+				props.onRequestClose();
+			}
+		}
+
+		function handleClose() {
+			if ( props.onRequestClose ) {
+				props.onRequestClose();
 			}
 		}
 
 		return el(
 			'div',
-			{
-				className: 'image-pin-block-editor__color-picker-commit-wrap',
-				onPointerUp: commit,
-				onPointerCancel: commit,
-				onBlur: commit,
-				onKeyDown: function( evt ) {
-					if ( evt.key === 'Enter' ) {
-						commit();
-					}
-				}
-			},
+			{ className: 'image-pin-block-editor__color-picker-commit-wrap' },
 			el( ColorPicker, {
 				color: props.value || undefined,
 				onChange: handleChange,
 				enableAlpha: !! props.enableAlpha
-			} )
+			} ),
+			el(
+				'div',
+				{ className: 'image-pin-block-editor__color-picker-actions' },
+				el( Button, { variant: 'primary', onClick: handleApply }, __( 'Apply', 'image-pin-block' ) ),
+				el( Button, { variant: 'tertiary', onClick: handleClose }, __( 'Close', 'image-pin-block' ) )
+			)
 		);
 	}
 
@@ -545,6 +885,16 @@
 			el( Dropdown, {
 				className: 'image-pin-block-editor__color-dropdown',
 				contentClassName: 'image-pin-block-editor__color-dropdown-content',
+				// Dropdownが閉じる経路(「閉じる」ボタン・外側クリック・Escapeのいずれでも)は
+				// すべてこの1箇所を通る。「適用」を押さずに閉じた場合、プレビュー値
+				// (previewColors)を消して確定済みの値へ戻す(未適用の変更を破棄する)。
+				// 「適用」を押した場合もonCommit側で同じ処理を行うため、二重に呼ばれても
+				// 副作用は無い(clearColorPreviewは対象keyが無ければ何もしない)。
+				onClose: function() {
+					if ( props.onPreviewClear ) {
+						props.onPreviewClear();
+					}
+				},
 				renderToggle: function( toggleProps ) {
 					return el(
 						Button,
@@ -560,7 +910,7 @@
 						props.label
 					);
 				},
-				renderContent: function() {
+				renderContent: function( contentProps ) {
 					return el( ColorPickerField, {
 						value: props.value,
 						enableAlpha: props.enableAlpha,
@@ -570,7 +920,8 @@
 							if ( props.onPreviewClear ) {
 								props.onPreviewClear();
 							}
-						}
+						},
+						onRequestClose: contentProps.onClose
 					} );
 				}
 			} ),
@@ -615,26 +966,215 @@
 
 		var bgBase = s.backgroundColor || DEFAULT_POPOVER_BG_BASE;
 		var ratio = props.ratio || 1;
+
+		// 位置計算はview.jsのpositionPopover()と同じ基本ルール(まずPin右側→入らなければ
+		// 左側→左右とも不足なら画像内へclamp。縦方向はPin中央付近→上下からはみ出す場合は
+		// clamp)を使い、pin.x > 60 のような単純な閾値では決めない。実際のwrapper・popover
+		// サイズをgetBoundingClientRect()で実測する(モーダルのZoom(transform: scale())は
+		// このコンポーネント自体も含めて掛かるため、実測値はzoomScaleで割ってローカル単位へ
+		// 戻す。詳細はcomputeLabelCenter付近のコメント参照)。
+		var popoverRef = useRef( null );
+		var positionState = useState( { left: 0, top: 0 } );
+		var position = positionState[ 0 ];
+		var setPosition = positionState[ 1 ];
+
+		useLayoutEffect( function() {
+			var wrapperEl = props.wrapperRef && props.wrapperRef.current;
+			var popoverEl = popoverRef.current;
+			if ( ! wrapperEl || ! popoverEl ) {
+				return;
+			}
+			var zoomScale = props.zoomScale || 1;
+			var wrapperRect = wrapperEl.getBoundingClientRect();
+			var wrapperLocalWidth = wrapperRect.width / zoomScale;
+			var wrapperLocalHeight = wrapperRect.height / zoomScale;
+			var popRect = popoverEl.getBoundingClientRect();
+			var popW = popRect.width / zoomScale;
+			var popH = popRect.height / zoomScale;
+
+			var gap = 10;
+			var pinLeft = ( clampPercent( pin.x ) / 100 ) * wrapperLocalWidth;
+			var pinTop = ( clampPercent( pin.y ) / 100 ) * wrapperLocalHeight;
+
+			var left = pinLeft + gap;
+			var top = pinTop - popH / 2;
+
+			if ( left + popW > wrapperLocalWidth ) {
+				left = pinLeft - gap - popW;
+			}
+			if ( left < 0 ) {
+				left = Math.max( 0, Math.min( pinLeft, wrapperLocalWidth - popW ) );
+			}
+			if ( top < 0 ) {
+				top = 0;
+			}
+			if ( top + popH > wrapperLocalHeight ) {
+				top = Math.max( 0, wrapperLocalHeight - popH );
+			}
+
+			setPosition( function( prev ) {
+				if ( Math.abs( prev.left - left ) < 0.5 && Math.abs( prev.top - top ) < 0.5 ) {
+					return prev;
+				}
+				return { left: left, top: top };
+			} );
+		} );
+
 		var boxStyle = Object.assign(
 			{
 				backgroundColor: applyOpacityToColor( bgBase, s.backgroundOpacity ),
 				color: s.textColor || undefined,
 				fontSize: ( s.fontSize * ratio ) + 'px',
-				left: clampPercent( pin.x ) + '%',
-				top: clampPercent( pin.y ) + '%',
-				transform: 'translate(' + ( pin.x > 60 ? 'calc(-100% - 12px)' : '12px' ) + ', ' + ( pin.y < 25 ? '12px' : 'calc(-100% - 12px)' ) + ')'
+				left: position.left + 'px',
+				top: position.top + 'px'
 			},
 			buildStrokeStyle( s.strokeWidth, s.strokeColor )
 		);
 
 		return el(
 			'div',
-			{ className: 'image-pin-block-editor__canvas-popover', style: boxStyle },
+			{ className: 'image-pin-block-editor__canvas-popover', style: boxStyle, ref: popoverRef },
 			showLabel
 				? el( 'div', { className: 'image-pin-block-editor__canvas-popover-label' }, labelText )
 				: null,
 			el( 'div', { className: 'image-pin-block-editor__canvas-popover-body' }, pin.description || '' )
 		);
+	}
+
+	// ─── 「画像として保存」(PNG書き出し) ───
+	// 対象は Editor Preview のスクリーンショットではなく、元画像(natural dimensions)に
+	// 保存済みのPin/Marker/Label(公開時に常時見える要素のみ)を合成したもの。Popover・
+	// 16:9のletterbox・Zoom/Pan・選択枠・リサイズハンドル・「ここにピンを追加」等の
+	// Editor限定のUIは一切含めない。出力解像度は常に imageWidth × imageHeight
+	// (Editor上のZoom/Panの状態に関わらず、常に元画像全体を等倍で書き出す)。
+
+	// crossOrigin='anonymous'を指定して画像を読み込む。同一オリジンのWordPress
+	// メディアであれば通常どおり動作する。異なるオリジンでサーバー側がCORSを許可して
+	// いない場合、読み込み自体は成功してもCanvasが「汚染」され、後続のtoBlob()が
+	// 失敗する(呼び出し側でエラー表示する)。
+	function loadImageForExport( url ) {
+		return new Promise( function( resolve, reject ) {
+			var img = new window.Image();
+			img.crossOrigin = 'anonymous';
+			img.onload = function() { resolve( img ); };
+			img.onerror = function() { reject( new Error( 'image load failed: ' + url ) ); };
+			img.src = url;
+		} );
+	}
+
+	// Canvas 2DでLabelを描画したときの実際のサイズをmeasureText()で見積もる。
+	// DOM(ブラウザの実際のフォントレンダリング)と完全一致はしないが、安全マージンを
+	// 加えて広めに見積もることで、「Pinへ重ならないこと」を優先する(仕様の優先順位どおり)。
+	var PNG_LABEL_PADDING_X = 12;
+	var PNG_LABEL_PADDING_Y = 6;
+	var PNG_LABEL_SAFETY_MARGIN = 2;
+	function measurePngLabelSize( ctx, text, fontSizePx ) {
+		ctx.font = fontSizePx + 'px sans-serif';
+		var metrics = ctx.measureText( text );
+		return {
+			width: metrics.width + PNG_LABEL_PADDING_X + PNG_LABEL_SAFETY_MARGIN,
+			height: fontSizePx * 1.4 + PNG_LABEL_PADDING_Y + PNG_LABEL_SAFETY_MARGIN
+		};
+	}
+
+	// 角丸矩形の背景+テキスト(縁取り→塗りの順。paint-order: stroke fill と同じ考え方)を描画する。
+	function drawPngLabel( ctx, text, centerX, centerY, boxWidth, boxHeight, fontSizePx, style ) {
+		var left = centerX - boxWidth / 2;
+		var top = centerY - boxHeight / 2;
+		var radius = Math.min( 3, boxWidth / 2, boxHeight / 2 );
+		ctx.save();
+		ctx.beginPath();
+		ctx.moveTo( left + radius, top );
+		ctx.arcTo( left + boxWidth, top, left + boxWidth, top + boxHeight, radius );
+		ctx.arcTo( left + boxWidth, top + boxHeight, left, top + boxHeight, radius );
+		ctx.arcTo( left, top + boxHeight, left, top, radius );
+		ctx.arcTo( left, top, left + boxWidth, top, radius );
+		ctx.closePath();
+		ctx.fillStyle = style.backgroundColor;
+		ctx.fill();
+
+		ctx.font = fontSizePx + 'px sans-serif';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		if ( style.strokeWidthPx > 0 ) {
+			ctx.lineWidth = style.strokeWidthPx;
+			ctx.strokeStyle = style.strokeColor;
+			ctx.strokeText( text, centerX, centerY );
+		}
+		ctx.fillStyle = style.textColor;
+		ctx.fillText( text, centerX, centerY );
+		ctx.restore();
+	}
+
+	// 1件のピンを、元画像のnatural座標系(ctx.canvas.width/heightが既にimageWidth/Height)
+	// へ描画する。display: Edit()のdisplaySettingsと同じ形(pinSize/pinColor/
+	// labelBackgroundColor等)。pinSize/labelFontSizeは「imageWidthを基準にした値」と
+	// して保存されているため、書き出しは常に等倍(ratio=1相当)でよい
+	// (docs/DATA_LAYOUT.mdの「pinSize / labelFontSize の自動計算」参照)。
+	function drawPinForExport( ctx, pin, markerImagesByUrl, mainImageWidth, display ) {
+		var x = ( clampPercent( pin.x ) / 100 ) * ctx.canvas.width;
+		var y = ( clampPercent( pin.y ) / 100 ) * ctx.canvas.height;
+		var hasLabelText = !! ( pin.label && '' !== pin.label );
+		var pinRect = null;
+
+		if ( pin.markerImageUrl ) {
+			var markerImg = markerImagesByUrl[ pin.markerImageUrl ];
+			var naturalW = markerImg ? ( markerImg.naturalWidth || 0 ) : 0;
+			var naturalH = markerImg ? ( markerImg.naturalHeight || 0 ) : 0;
+			if ( markerImg && naturalW > 0 && naturalH > 0 ) {
+				var scale = resolveMarkerScale( pin );
+				var idealWidth = naturalW * ( scale / 100 );
+				var maxBaseWidth = mainImageWidth * MARKER_MAX_WIDTH_RATIO;
+				var baseWidth = Math.min( idealWidth, maxBaseWidth );
+				var baseHeight = baseWidth * ( naturalH / naturalW );
+				ctx.drawImage( markerImg, x - baseWidth / 2, y - baseHeight / 2, baseWidth, baseHeight );
+				pinRect = { centerX: x, centerY: y, width: baseWidth, height: baseHeight };
+			}
+		} else {
+			var pinSize = display.pinSize;
+			ctx.save();
+			ctx.beginPath();
+			ctx.arc( x, y, pinSize / 2, 0, Math.PI * 2 );
+			ctx.fillStyle = display.pinColor;
+			ctx.fill();
+			ctx.lineWidth = 2;
+			ctx.strokeStyle = '#ffffff';
+			ctx.stroke();
+			ctx.restore();
+			pinRect = { centerX: x, centerY: y, width: pinSize, height: pinSize };
+		}
+
+		if ( ! pinRect ) {
+			return;
+		}
+
+		var showLabel = pin.markerImageUrl ? ( pin.showLabel !== false && hasLabelText ) : hasLabelText;
+		if ( ! showLabel ) {
+			return;
+		}
+
+		var fontSizePx = display.labelFontSize;
+		var textSize = measurePngLabelSize( ctx, pin.label, fontSizePx );
+		var center = computeLabelCenter( pin, pinRect, textSize );
+		var strokePx = STROKE_WIDTH_PX[ display.labelStrokeWidth ] || 0;
+		drawPngLabel( ctx, pin.label, center.x, center.y, textSize.width, textSize.height, fontSizePx, {
+			backgroundColor: applyOpacityToColor( display.labelBackgroundColor, display.labelBackgroundOpacity ),
+			textColor: display.labelTextColor,
+			strokeColor: display.labelStrokeColor,
+			strokeWidthPx: strokePx
+		} );
+	}
+
+	// 生成したBlobをファイルとして保存させる(Blob URL + 一時的な<a download>要素)。
+	function triggerPngDownload( blob, fileName ) {
+		var url = window.URL.createObjectURL( blob );
+		var a = document.createElement( 'a' );
+		a.href = url;
+		a.download = fileName;
+		document.body.appendChild( a );
+		a.click();
+		document.body.removeChild( a );
+		window.setTimeout( function() { window.URL.revokeObjectURL( url ); }, 1000 );
 	}
 
 	function Edit( props ) {
@@ -866,6 +1406,78 @@
 			} );
 		}, [ isModalOpen, modalZoom, modalDisplayWidth, modalDisplayHeight, modalPreviewSize.width, modalPreviewSize.height ] );
 
+		// 「全体を表示する」: 現在のPreview viewportの実寸・画像のnatural sizeに対して
+		// Fit状態(画像全体が最大サイズで収まる状態)へ再計算する。「Zoomを100%へ戻す」
+		// という固定操作ではない点に注意: modalFitRatio自体がmodalPreviewSize(Preview
+		// viewportの実寸。ResizeObserverで常に最新化される)とattributes.imageWidth/Height
+		// から毎レンダリング再計算される値であり、Zoom=MODAL_ZOOM_DEFAULT(=Fit状態を表す
+		// 100)・Pan=(0,0)は「その時点の再計算結果を採用する」という意味になる。将来
+		// MODAL_PREVIEW_ASPECT_RATIO(現在16:9)を差し替えても、この関数自体は変更不要。
+		function resetToFit() {
+			setModalZoom( MODAL_ZOOM_DEFAULT );
+			setModalPan( { x: 0, y: 0 } );
+		}
+
+		// 「画像として保存」(PNG書き出し)。元画像(natural dimensions)へ、保存済みの
+		// pins[]・見た目設定からPin/Marker/Labelを一から合成する(Editor Previewの
+		// スクリーンショットではない。詳細はdrawPinForExport等のコメント参照)。
+		// マーカー画像は複数のピンで同じURLを使い回している場合があるため、URLごとに
+		// 一度だけ読み込む。
+		function handleSaveAsImage() {
+			if ( ! attributes.imageUrl || ! attributes.imageWidth || ! attributes.imageHeight ) {
+				return;
+			}
+			var exportWidth = attributes.imageWidth;
+			var exportHeight = attributes.imageHeight;
+
+			var markerUrls = [];
+			pins.forEach( function( pin ) {
+				if ( pin.markerImageUrl && markerUrls.indexOf( pin.markerImageUrl ) === -1 ) {
+					markerUrls.push( pin.markerImageUrl );
+				}
+			} );
+
+			var loadPromises = [ loadImageForExport( attributes.imageUrl ) ].concat(
+				markerUrls.map( function( url ) { return loadImageForExport( url ); } )
+			);
+
+			Promise.all( loadPromises ).then( function( images ) {
+				var mainImg = images[ 0 ];
+				var markerImagesByUrl = {};
+				markerUrls.forEach( function( url, index ) {
+					markerImagesByUrl[ url ] = images[ index + 1 ];
+				} );
+
+				var canvas = document.createElement( 'canvas' );
+				canvas.width = exportWidth;
+				canvas.height = exportHeight;
+				var ctx = canvas.getContext( '2d' );
+				if ( ! ctx ) {
+					window.alert( __( 'Your browser does not support saving as an image.', 'image-pin-block' ) );
+					return;
+				}
+				ctx.drawImage( mainImg, 0, 0, exportWidth, exportHeight );
+
+				pins.forEach( function( pin ) {
+					drawPinForExport( ctx, pin, markerImagesByUrl, exportWidth, displaySettings );
+				} );
+
+				try {
+					canvas.toBlob( function( resultBlob ) {
+						if ( ! resultBlob ) {
+							window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
+							return;
+						}
+						triggerPngDownload( resultBlob, 'image-pin-block.png' );
+					} );
+				} catch ( err ) {
+					window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
+				}
+			} ).catch( function() {
+				window.alert( __( 'Unable to save the image. Please try again.', 'image-pin-block' ) );
+			} );
+		}
+
 		// 「ここにピンを追加」確認メニューは、画像上の特定の位置に紐づくUIのため、
 		// Zoom変更やPreviewのサイズ変更(ブラウザのリサイズ等)があった場合は候補位置の
 		// 意味が薄れるため閉じる(メニュー自体はZoom/Panの対象にしていないため見た目上は
@@ -910,6 +1522,164 @@
 			} else {
 				delete markerImageRefsRef.current[ pinId ];
 			}
+		}
+
+		// Label位置(角丸矩形経路上のドラッグ配置)用のDOM参照。モーダル専用
+		// (registerMarkerImageRef等と同じ理由でキャンバス側では登録しない)。
+		// modalPinAnchorRefsRef: Pin/Marker本体(buildPinVisualOnlyが描画するコンテナ)。
+		// modalLabelRefsRef: Label要素自体。どちらもgetBoundingClientRect()で実測し、
+		// 数式で再現せず実際の描画結果からLabel位置を計算する(既存のマーカー移動範囲
+		// 制限と同じ考え方)。
+		var modalPinAnchorRefsRef = useRef( {} );
+		function registerPinAnchorRef( pinId, node ) {
+			if ( node ) {
+				modalPinAnchorRefsRef.current[ pinId ] = node;
+			} else {
+				delete modalPinAnchorRefsRef.current[ pinId ];
+			}
+		}
+		var modalLabelRefsRef = useRef( {} );
+		function registerLabelRef( pinId, node ) {
+			if ( node ) {
+				modalLabelRefsRef.current[ pinId ] = node;
+			} else {
+				delete modalLabelRefsRef.current[ pinId ];
+			}
+		}
+
+		// 各PinのLabelの実際の描画位置(ローカル単位のx/y中心座標)。ドラッグ中はhandleMove
+		// 側でlabelPosition(保存属性)を直接更新するため、ここは「保存済みのlabelPositionと
+		// 実際のPin/Marker・Labelのサイズから、画面に描画する座標を計算する」側だけを担当する。
+		// Label文字列・Font Size・縁取り太さ・選択状態・Marker Resize・Preview resize等、
+		// Label矩形やPin/Marker矩形のサイズへ影響しうるものが変わるたびに再計算が必要なため、
+		// 依存配列を列挙する代わりに「毎レンダリング後に実測し、値が変わったときだけ
+		// setStateする」方式にする(実測値が収束すればsetStateが起きなくなるため、
+		// ResizeObserver等と同様の無限ループにはならない)。
+		var labelRenderPositionsState = useState( {} );
+		var labelRenderPositions = labelRenderPositionsState[ 0 ];
+		var setLabelRenderPositions = labelRenderPositionsState[ 1 ];
+
+		useLayoutEffect( function() {
+			if ( ! isModalOpen ) {
+				return;
+			}
+			var wrapperEl = modalWrapperRef.current;
+			if ( ! wrapperEl ) {
+				return;
+			}
+			var zoomScale = modalZoom / 100;
+			var next = {};
+			var changed = false;
+			pins.forEach( function( pin ) {
+				var anchorEl = modalPinAnchorRefsRef.current[ pin.id ];
+				var labelEl = modalLabelRefsRef.current[ pin.id ];
+				if ( ! anchorEl || ! labelEl ) {
+					return;
+				}
+				var pinRect = measureLocalRectRelativeTo( anchorEl, wrapperEl, zoomScale );
+				var labelRect = measureLocalRectRelativeTo( labelEl, wrapperEl, zoomScale );
+				if ( ! pinRect || ! labelRect ) {
+					return;
+				}
+				var center = computeLabelCenter( pin, pinRect, { width: labelRect.width, height: labelRect.height } );
+				next[ pin.id ] = { x: center.x, y: center.y };
+				var prev = labelRenderPositions[ pin.id ];
+				if ( ! prev || Math.abs( prev.x - center.x ) > 0.5 || Math.abs( prev.y - center.y ) > 0.5 ) {
+					changed = true;
+				}
+			} );
+			// 既存のposition一覧に無いピン(削除された等)を残さないよう、キー数の違いも
+			// 変化として扱う。
+			if ( ! changed && Object.keys( next ).length !== Object.keys( labelRenderPositions ).length ) {
+				changed = true;
+			}
+			if ( changed ) {
+				setLabelRenderPositions( next );
+			}
+		} );
+
+		// Labelを直接ドラッグして、角丸矩形経路(Pin/Markerの周囲)上の任意の位置へ配置する。
+		// 経路・Label自身のサイズは、ドラッグ開始時点で一度だけ実測する(位置移動そのものでは
+		// Pin/Markerやテキストの大きさは変わらないため。marker resize等と同様、ドラッグ中は
+		// pins配列を直接更新し、pointerup時にまとめて確定するのではなく毎回commitする
+		// 方式に揃える。理由はhandleModalPinPointerDown/handleMarkerResizePointerDownの
+		// コメント参照)。
+		function handleLabelDragPointerDown( pinId, evt ) {
+			evt.stopPropagation();
+			evt.preventDefault();
+			setPendingMenu( null );
+			setSelectedPinId( pinId );
+
+			var wrapperEl = modalWrapperRef.current;
+			var anchorEl = modalPinAnchorRefsRef.current[ pinId ];
+			var labelEl = evt.currentTarget;
+			if ( ! wrapperEl || ! anchorEl || ! labelEl ) {
+				return;
+			}
+
+			var zoomScale = modalZoom / 100;
+			var pin = pins.filter( function( p ) { return p.id === pinId; } )[ 0 ];
+			if ( ! pin ) {
+				return;
+			}
+			var pinRect = measureLocalRectRelativeTo( anchorEl, wrapperEl, zoomScale );
+			var labelRect = measureLocalRectRelativeTo( labelEl, wrapperEl, zoomScale );
+			if ( ! pinRect || ! labelRect ) {
+				return;
+			}
+			var pathRect = {
+				left: pinRect.centerX - pinRect.width / 2 - LABEL_PATH_MARGIN,
+				top: pinRect.centerY - pinRect.height / 2 - LABEL_PATH_MARGIN,
+				width: pinRect.width + LABEL_PATH_MARGIN * 2,
+				height: pinRect.height + LABEL_PATH_MARGIN * 2
+			};
+			var path = buildRoundedRectPath( pathRect, LABEL_PATH_RADIUS );
+
+			var pointerId = evt.pointerId;
+			if ( labelEl.setPointerCapture ) {
+				labelEl.setPointerCapture( pointerId );
+			}
+
+			function handleMove( moveEvt ) {
+				if ( moveEvt.pointerId !== pointerId ) {
+					return;
+				}
+				moveEvt.stopPropagation();
+				var wRect = wrapperEl.getBoundingClientRect();
+				if ( zoomScale <= 0 ) {
+					return;
+				}
+				var localX = ( moveEvt.clientX - wRect.left ) / zoomScale;
+				var localY = ( moveEvt.clientY - wRect.top ) / zoomScale;
+				var t = nearestTOnPath( path, localX, localY );
+				updatePins(
+					pins.map( function( p ) {
+						if ( p.id !== pinId ) {
+							return p;
+						}
+						return Object.assign( {}, p, { labelPosition: t } );
+					} )
+				);
+			}
+
+			function endDrag( endEvt ) {
+				if ( endEvt && endEvt.pointerId !== pointerId ) {
+					return;
+				}
+				if ( endEvt ) {
+					endEvt.stopPropagation();
+				}
+				if ( labelEl.hasPointerCapture && labelEl.hasPointerCapture( pointerId ) ) {
+					labelEl.releasePointerCapture( pointerId );
+				}
+				labelEl.removeEventListener( 'pointermove', handleMove );
+				labelEl.removeEventListener( 'pointerup', endDrag );
+				labelEl.removeEventListener( 'pointercancel', endDrag );
+			}
+
+			labelEl.addEventListener( 'pointermove', handleMove );
+			labelEl.addEventListener( 'pointerup', endDrag );
+			labelEl.addEventListener( 'pointercancel', endDrag );
 		}
 
 		// getBlocksByName() はブロックエディタのストアが保持する索引を使うため、
@@ -1519,25 +2289,6 @@
 					onCommit: function( n ) { setAttributes( { labelFontSize: n } ); }
 				} ),
 				el( ColorInputRow, {
-					label: __( 'Label background color', 'image-pin-block' ),
-					value: displaySettings.labelBackgroundColor,
-					// 既定値が rgba() のため、ピッカー自体でもアルファを編集できるようにする
-					// (背景の不透明度スライダーとは別に、色そのものに透明度を持たせたい場合のため)。
-					enableAlpha: true,
-					onPreview: function( color ) { setColorPreview( 'labelBackgroundColor', color ); },
-					onPreviewClear: function() { clearColorPreview( 'labelBackgroundColor' ); },
-					onCommit: function( color ) { setAttributes( { labelBackgroundColor: color || DEFAULT_LABEL_BG_COLOR } ); }
-				} ),
-				el( RangeControl, {
-					label: __( 'Label background opacity', 'image-pin-block' ),
-					value: displaySettings.labelBackgroundOpacity,
-					min: 0,
-					max: 100,
-					onChange: function( value ) {
-						setAttributes( { labelBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
-					}
-				} ),
-				el( ColorInputRow, {
 					label: __( 'Label text color', 'image-pin-block' ),
 					value: displaySettings.labelTextColor,
 					onPreview: function( color ) { setColorPreview( 'labelTextColor', color ); },
@@ -1557,6 +2308,25 @@
 					options: STROKE_WIDTH_OPTIONS,
 					onChange: function( value ) { setAttributes( { labelStrokeWidth: value } ); }
 				} ),
+				el( ColorInputRow, {
+					label: __( 'Label background color', 'image-pin-block' ),
+					value: displaySettings.labelBackgroundColor,
+					// 既定値が rgba() のため、ピッカー自体でもアルファを編集できるようにする
+					// (背景の不透明度スライダーとは別に、色そのものに透明度を持たせたい場合のため)。
+					enableAlpha: true,
+					onPreview: function( color ) { setColorPreview( 'labelBackgroundColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'labelBackgroundColor' ); },
+					onCommit: function( color ) { setAttributes( { labelBackgroundColor: color || DEFAULT_LABEL_BG_COLOR } ); }
+				} ),
+				el( RangeControl, {
+					label: __( 'Label background opacity', 'image-pin-block' ),
+					value: displaySettings.labelBackgroundOpacity,
+					min: 0,
+					max: 100,
+					onChange: function( value ) {
+						setAttributes( { labelBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
+					}
+				} ),
 				el( 'h3', { className: 'image-pin-block-editor__modal-settings-heading' }, __( 'Popover', 'image-pin-block' ) ),
 				el( ClampedNumberControl, {
 					label: __( 'Popover font size (px)', 'image-pin-block' ),
@@ -1565,23 +2335,6 @@
 					max: POPOVER_FONT_SIZE_MAX,
 					defaultValue: DEFAULT_POPOVER_FONT_SIZE,
 					onCommit: function( n ) { setAttributes( { popoverFontSize: n } ); }
-				} ),
-				el( ColorInputRow, {
-					label: __( 'Popover background color', 'image-pin-block' ),
-					value: popoverSettings.backgroundColor,
-					allowEmpty: true,
-					onPreview: function( color ) { setColorPreview( 'popoverBackgroundColor', color ); },
-					onPreviewClear: function() { clearColorPreview( 'popoverBackgroundColor' ); },
-					onCommit: function( color ) { setAttributes( { popoverBackgroundColor: color || '' } ); }
-				} ),
-				el( RangeControl, {
-					label: __( 'Popover background opacity', 'image-pin-block' ),
-					value: popoverSettings.backgroundOpacity,
-					min: 0,
-					max: 100,
-					onChange: function( value ) {
-						setAttributes( { popoverBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
-					}
 				} ),
 				el( ColorInputRow, {
 					label: __( 'Popover text color', 'image-pin-block' ),
@@ -1603,6 +2356,23 @@
 					value: popoverSettings.strokeWidth,
 					options: STROKE_WIDTH_OPTIONS,
 					onChange: function( value ) { setAttributes( { popoverStrokeWidth: value } ); }
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Popover background color', 'image-pin-block' ),
+					value: popoverSettings.backgroundColor,
+					allowEmpty: true,
+					onPreview: function( color ) { setColorPreview( 'popoverBackgroundColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'popoverBackgroundColor' ); },
+					onCommit: function( color ) { setAttributes( { popoverBackgroundColor: color || '' } ); }
+				} ),
+				el( RangeControl, {
+					label: __( 'Popover background opacity', 'image-pin-block' ),
+					value: popoverSettings.backgroundOpacity,
+					min: 0,
+					max: 100,
+					onChange: function( value ) {
+						setAttributes( { popoverBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
+					}
 				} )
 			)
 		);
@@ -1644,6 +2414,11 @@
 			strokeColor: resolveColorPreview( 'popoverStrokeColor', popoverSettings.strokeColor )
 		} );
 
+		// Pin/Markerのコンテナ自体はマーカー/ドット(+選択中の画像マーカーのリサイズ
+		// ハンドル)だけを含む(buildPinVisualOnly。Labelは含まない)。Labelは下記の
+		// modalLabelElementsとして、角丸矩形経路上の位置へ独立して配置する
+		// (「Label位置」参照)。refでこのコンテナ自体をmodalPinAnchorRefsRefへ登録し、
+		// Label位置計算のPin/Marker矩形として実測に使う。
 		var modalPinElements = pins.map( function( pin ) {
 			var isPinSelected = pin.id === selectedPinId;
 			return el(
@@ -1651,6 +2426,7 @@
 				{
 					key: pin.id,
 					type: 'button',
+					ref: function( node ) { registerPinAnchorRef( pin.id, node ); },
 					className: 'image-pin-block-editor__pin'
 						+ ( isPinSelected ? ' is-selected' : '' )
 						+ ( pin.markerImageUrl ? ' has-marker-image' : '' ),
@@ -1662,7 +2438,43 @@
 					// 同じ位置に意図しない新規ピンが追加されてしまう。
 					onClick: function( evt ) { evt.stopPropagation(); }
 				},
-				buildPinContent( pin, modalDisplaySettings, isPinSelected )
+				buildPinVisualOnly( pin, modalDisplaySettings, isPinSelected )
+			);
+		} );
+
+		// Label(モーダル専用、独立配置+ドラッグ可能)。Show label OFF・ラベル未入力の
+		// ピンは、既存のキャンバス/フロント表示と同じ条件で非表示にする(何も描画しない。
+		// 掴む対象が無いピンにドラッグUIだけ出すことはしない)。描画位置は
+		// labelRenderPositions(実測ベースで毎レンダリング後に更新)を使う。初回描画
+		// (実測が済むまでの一瞬)はuseLayoutEffectがペイント前に補正するため、既定値
+		// (Pin/Markerのアンカー位置と同じ0,0オフセット相当)を使っても視覚的な破綻はない。
+		var modalLabelElements = [];
+		pins.forEach( function( pin ) {
+			var hasLabelText = !! ( pin.label && '' !== pin.label );
+			var showLabel = pin.markerImageUrl ? ( pin.showLabel !== false ) : true;
+			if ( ! hasLabelText || ! showLabel ) {
+				return;
+			}
+			var pos = labelRenderPositions[ pin.id ] || { x: 0, y: 0 };
+			var style = Object.assign(
+				{
+					position: 'absolute',
+					left: pos.x + 'px',
+					top: pos.y + 'px',
+					transform: 'translate(-50%, -50%)'
+				},
+				buildLabelStyle( modalDisplaySettings )
+			);
+			modalLabelElements.push(
+				el( 'span', {
+					key: 'label-' + pin.id,
+					className: 'image-pin-block-editor__pin-label image-pin-block-editor__pin-label--draggable'
+						+ ( pin.id === selectedPinId ? ' is-selected' : '' ),
+					style: style,
+					ref: function( node ) { registerLabelRef( pin.id, node ); },
+					onPointerDown: function( evt ) { handleLabelDragPointerDown( pin.id, evt ); },
+					onClick: function( evt ) { evt.stopPropagation(); }
+				}, pin.label )
 			);
 		} );
 
@@ -1670,7 +2482,13 @@
 		// モーダル内の画像編集エリアの実画像の上に表示する(CanvasPopoverPreview参照。
 		// ラベル・説明文がどちらも空のときは何も表示しない)。
 		var modalPopoverElement = selectedPin
-			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: modalPopoverSettings, ratio: modalFitRatio } )
+			? el( CanvasPopoverPreview, {
+				pin: selectedPin,
+				popoverSettings: modalPopoverSettings,
+				ratio: modalFitRatio,
+				wrapperRef: modalWrapperRef,
+				zoomScale: modalZoom / 100
+			} )
 			: null;
 
 		// 「Preview」: モーダル左上の画像編集領域。DOMの責務を4段に分ける
@@ -1739,6 +2557,7 @@
 							alt: ''
 						} ),
 						modalPinElements,
+						modalLabelElements,
 						modalPopoverElement
 					)
 				),
@@ -1800,15 +2619,25 @@
 		var modalLeftTop = el(
 			'div',
 			{ className: 'image-pin-block-editor__modal-left-top' },
-			el( RangeControl, {
-				label: __( 'Zoom (%)', 'image-pin-block' ),
-				value: modalZoom,
-				min: MODAL_ZOOM_MIN,
-				max: MODAL_ZOOM_MAX,
-				onChange: function( value ) {
-					setModalZoom( ( typeof value === 'number' ) ? value : MODAL_ZOOM_DEFAULT );
-				}
-			} ),
+			el(
+				'div',
+				{ className: 'image-pin-block-editor__zoom-row' },
+				el( RangeControl, {
+					className: 'image-pin-block-editor__zoom-range',
+					label: __( 'Zoom (%)', 'image-pin-block' ),
+					value: modalZoom,
+					min: MODAL_ZOOM_MIN,
+					max: MODAL_ZOOM_MAX,
+					onChange: function( value ) {
+						setModalZoom( ( typeof value === 'number' ) ? value : MODAL_ZOOM_DEFAULT );
+					}
+				} ),
+				el( Button, {
+					variant: 'secondary',
+					className: 'image-pin-block-editor__fit-button',
+					onClick: resetToFit
+				}, __( 'Show entire image', 'image-pin-block' ) )
+			),
 			modalImageArea,
 			pinListCard
 		);
@@ -1818,11 +2647,21 @@
 		// ラベル入力欄は showLabel の状態に関わらず常に同じ場所に表示する。Show label
 		// OFF(画像マーカーのみ)のときは非表示ではなく disabled にして、既存の入力文字列を
 		// 一切消さずに保持する(再度ONにしたとき、直前の文字列がそのまま復元されるようにする)。
+		// 「ラベル」「説明」「マーカー画像」の3カラムを、視覚的に1つの外側カード
+		// (「ピンの内容」)へまとめる。3カラムの横並び自体・各コントロールの機能は
+		// 変更しない(整理するのはカード構造のみ)。外側カードは選択の有無に関わらず
+		// 常に同じ構造(見出し+中身)で、ピンの種類による内容量の増減で外側カードの
+		// 増減はしない(丸マーカー/画像マーカーどちらでも同じ3カラムの中でMarker画像列の
+		// 中身だけが変わる)。
 		var isLabelInputDisabled = !! ( selectedPin && selectedPin.markerImageUrl && selectedPin.showLabel === false );
 		var modalLeftBottom = el(
 			'div',
 			{ className: 'image-pin-block-editor__modal-left-bottom' },
-			selectedPin
+			el(
+				'div',
+				{ className: 'image-pin-block-editor__individual-card' },
+				el( 'p', { className: 'image-pin-block-editor__individual-card-heading' }, __( 'Pin content', 'image-pin-block' ) ),
+				selectedPin
 				? el(
 					'div',
 					{ className: 'image-pin-block-editor__modal-individual-grid' },
@@ -1934,6 +2773,7 @@
 					)
 				)
 				: el( 'p', { className: 'image-pin-block-editor__modal-individual-empty' }, __( 'Click the image to add a pin.', 'image-pin-block' ) )
+			)
 		);
 
 		// モーダル左カラム: 上段(画像編集エリア)と下段(個別設定)を縦に積む。
@@ -1988,7 +2828,8 @@
 						el( Button, {
 							key: 'save-as-image',
 							variant: 'secondary',
-							disabled: true
+							disabled: ! attributes.imageUrl,
+							onClick: handleSaveAsImage
 						}, __( 'Save as image', 'image-pin-block' ) )
 					]
 				},

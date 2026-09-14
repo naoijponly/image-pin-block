@@ -62,10 +62,32 @@
 	pointer-events: none;
 }
 
-/* マーカー画像を設定したピン: 横並び(丸+ラベル)ではなく縦並び(画像の下にラベル)にする */
+/* マーカー画像を設定したピン: 横並び(丸+ラベル)ではなく縦並び(画像の下にラベル)にする
+   (ブロック自身の表示専用キャンバスでのみ使用。モーダルは独立配置のLabelを使うため
+   このクラス自体の見た目には影響しない)。 */
 .image-pin-block-editor__pin.has-marker-image {
 	flex-direction: column;
 	gap: 2px;
+}
+
+/* モーダル専用: Pin/Markerの周囲へ自由に配置・ドラッグできるLabel(labelPosition参照)。
+   通常の.pin-label(pointer-events: none、flexで隣接表示)とは異なり、独立した
+   position: absoluteの兄弟要素としてドラッグ操作を受け付ける。フロント(style.css)には
+   このクラス自体が存在しないため、公開ページにドラッグ用カーソル等は一切出ない。 */
+.image-pin-block-editor__pin-label--draggable {
+	position: absolute;
+	pointer-events: auto;
+	cursor: grab;
+	touch-action: none;
+	z-index: 5;
+}
+
+.image-pin-block-editor__pin-label--draggable:active {
+	cursor: grabbing;
+}
+
+.image-pin-block-editor__pin-label--draggable.is-selected {
+	box-shadow: 0 0 0 2px #1e88e5;
 }
 
 .image-pin-block-editor__pin-marker-image {
@@ -173,6 +195,39 @@
 .image-pin-block-editor__canvas-popover-label {
 	font-weight: bold;
 	margin-bottom: 4px;
+}
+
+/* Color Pickerの「適用」「閉じる」ボタン行。 */
+.image-pin-block-editor__color-picker-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 8px;
+}
+
+/* ズームスライダー＋「全体を表示する」ボタンの行。 */
+.image-pin-block-editor__zoom-row {
+	display: flex;
+	align-items: flex-end;
+	gap: 12px;
+}
+
+.image-pin-block-editor__zoom-range {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.image-pin-block-editor__fit-button {
+	flex: 0 0 auto;
+	margin-bottom: 8px;
+	white-space: nowrap;
+}
+
+/* 説明文の手動改行(Textareaで入力した\n)をそのまま見た目に反映する。長い単語・URL等で
+   popoverの幅(max-width: 260px)から極端にはみ出さないよう、単語境界に関わらず折り返す。 */
+.image-pin-block-editor__canvas-popover-body {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 /* サイドバーの「ピンを編集」ボタン(v0.2.0でモーダル化。他の設定はすべてモーダル内へ移設)。 */
@@ -362,6 +417,21 @@
 	flex: 0 0 auto;
 	display: flex;
 	gap: 8px;
+}
+
+/* 個別設定全体を囲む外側カード(「ピンの内容」)。ピン一覧カード(pin-list-card)と
+   統一した見た目にする。中身の3カラム自体はこのカードの中で横並びのまま
+   (縦積みへは変更しない)。選択の有無に関わらず常に同じ構造(見出し+中身)。 */
+.image-pin-block-editor__individual-card {
+	background: #f0f0f0;
+	border: 0.5px solid #ccc;
+	border-radius: 6px;
+	padding: 10px 16px 14px;
+}
+
+.image-pin-block-editor__individual-card-heading {
+	margin: 0 0 10px;
+	font-weight: 600;
 }
 
 /* 個別設定(選択中のピンのみが対象。カードにはせず、区切り線を持つ3列に並べる)。

@@ -18,6 +18,206 @@
 	// editor.js / image-pin-block.php の同名比率と必ず一致させること。
 	var MARKER_MAX_WIDTH_RATIO = 0.5;
 
+	// Label位置(角丸矩形経路)関連の定数。editor.js の同名定数と必ず一致させること
+	// (Editor/Frontendで見た目がずれないようにするため)。
+	var LABEL_PATH_MARGIN = 6;
+	var LABEL_PATH_RADIUS = 10;
+	var LABEL_GAP = 6;
+
+	function clampToRange( n, min, max ) {
+		return Math.min( max, Math.max( min, n ) );
+	}
+
+	// ─── Label位置(角丸矩形の外周)用の純粋なジオメトリ計算 ───
+	// editor.js の同名関数と実装を同一に保つこと(コードの共有機構が無いため複製している。
+	// 詳細なコメントは editor.js 側を参照)。
+	function buildRoundedRectPath( rect, radius ) {
+		var w = Math.max( 0, rect.width );
+		var h = Math.max( 0, rect.height );
+		var r = Math.max( 0, Math.min( radius, w / 2, h / 2 ) );
+		var left = rect.left;
+		var top = rect.top;
+		var right = left + w;
+		var bottom = top + h;
+		var straightW = Math.max( 0, w - 2 * r );
+		var straightH = Math.max( 0, h - 2 * r );
+
+		function lineSegment( tag, x0, y0, x1, y1, nx, ny ) {
+			var len = Math.sqrt( ( x1 - x0 ) * ( x1 - x0 ) + ( y1 - y0 ) * ( y1 - y0 ) );
+			return {
+				tag: tag,
+				length: len,
+				pointAt: function( f ) {
+					return { x: x0 + ( x1 - x0 ) * f, y: y0 + ( y1 - y0 ) * f, nx: nx, ny: ny };
+				}
+			};
+		}
+
+		function arcSegment( cx, cy, startAngle, endAngle ) {
+			var sweep = endAngle - startAngle;
+			var len = Math.abs( sweep ) * r;
+			return {
+				tag: 'corner',
+				length: len,
+				pointAt: function( f ) {
+					var angle = startAngle + sweep * f;
+					var nx = Math.cos( angle );
+					var ny = Math.sin( angle );
+					return { x: cx + r * nx, y: cy + r * ny, nx: nx, ny: ny };
+				}
+			};
+		}
+
+		var segments = [];
+		if ( straightW > 0 ) {
+			segments.push( lineSegment( 'top', left + r, top, right - r, top, 0, -1 ) );
+		}
+		if ( r > 0 ) {
+			segments.push( arcSegment( right - r, top + r, -Math.PI / 2, 0 ) );
+		}
+		if ( straightH > 0 ) {
+			segments.push( lineSegment( 'right', right, top + r, right, bottom - r, 1, 0 ) );
+		}
+		if ( r > 0 ) {
+			segments.push( arcSegment( right - r, bottom - r, 0, Math.PI / 2 ) );
+		}
+		if ( straightW > 0 ) {
+			segments.push( lineSegment( 'bottom', right - r, bottom, left + r, bottom, 0, 1 ) );
+		}
+		if ( r > 0 ) {
+			segments.push( arcSegment( left + r, bottom - r, Math.PI / 2, Math.PI ) );
+		}
+		if ( straightH > 0 ) {
+			segments.push( lineSegment( 'left', left, bottom - r, left, top + r, -1, 0 ) );
+		}
+		if ( r > 0 ) {
+			segments.push( arcSegment( left + r, top + r, Math.PI, Math.PI * 1.5 ) );
+		}
+
+		var totalLength = segments.reduce( function( sum, seg ) { return sum + seg.length; }, 0 );
+		return { segments: segments, totalLength: totalLength };
+	}
+
+	function pathPointAtT( path, t ) {
+		if ( path.totalLength <= 0 || ! path.segments.length ) {
+			return { x: 0, y: 0, nx: 0, ny: -1 };
+		}
+		var tt = ( ( t % 1 ) + 1 ) % 1;
+		var s = tt * path.totalLength;
+		var offset = 0;
+		for ( var i = 0; i < path.segments.length; i++ ) {
+			var seg = path.segments[ i ];
+			var isLast = ( i === path.segments.length - 1 );
+			if ( s <= offset + seg.length || isLast ) {
+				var f = ( seg.length > 0 ) ? clampToRange( ( s - offset ) / seg.length, 0, 1 ) : 0;
+				return seg.pointAt( f );
+			}
+			offset += seg.length;
+		}
+		return path.segments[ 0 ].pointAt( 0 );
+	}
+
+	function findSegmentMidpointT( path, tag ) {
+		var offset = 0;
+		for ( var i = 0; i < path.segments.length; i++ ) {
+			var seg = path.segments[ i ];
+			if ( seg.tag === tag ) {
+				var s = offset + seg.length / 2;
+				return ( path.totalLength > 0 ) ? ( s / path.totalLength ) : 0;
+			}
+			offset += seg.length;
+		}
+		return null;
+	}
+
+	// labelPositionRaw: data-label-position属性からparseFloatした値(無ければNaN)。
+	// hasMarker: 画像マーカーかどうか(fallback方向の判定に使う。丸マーカーは右、
+	// 画像マーカーは下。editor.js の resolveLabelPosition と同じ考え方)。
+	function resolveLabelPosition( labelPositionRaw, hasMarker, path ) {
+		if ( typeof labelPositionRaw === 'number' && isFinite( labelPositionRaw ) ) {
+			var t = labelPositionRaw % 1;
+			if ( t < 0 ) {
+				t += 1;
+			}
+			return t;
+		}
+		var fallback = findSegmentMidpointT( path, hasMarker ? 'bottom' : 'right' );
+		return ( fallback !== null ) ? fallback : 0;
+	}
+
+	// pinLocalRect: {centerX, centerY, width, height}。labelLocalSize: {width, height}。
+	// すべて実際の表示px(Zoom等の追加transformが無いフロント側では、実測値をそのまま
+	// ローカル単位として扱える)。
+	function computeLabelCenter( labelPositionRaw, hasMarker, pinLocalRect, labelLocalSize ) {
+		var pathRect = {
+			left: pinLocalRect.centerX - pinLocalRect.width / 2 - LABEL_PATH_MARGIN,
+			top: pinLocalRect.centerY - pinLocalRect.height / 2 - LABEL_PATH_MARGIN,
+			width: pinLocalRect.width + LABEL_PATH_MARGIN * 2,
+			height: pinLocalRect.height + LABEL_PATH_MARGIN * 2
+		};
+		var path = buildRoundedRectPath( pathRect, LABEL_PATH_RADIUS );
+		var t = resolveLabelPosition( labelPositionRaw, hasMarker, path );
+		var anchor = pathPointAtT( path, t );
+		var support = Math.abs( anchor.nx ) * ( labelLocalSize.width / 2 ) + Math.abs( anchor.ny ) * ( labelLocalSize.height / 2 );
+		var dist = support + LABEL_GAP;
+		return { x: anchor.x + anchor.nx * dist, y: anchor.y + anchor.ny * dist };
+	}
+
+	// targetEl(実際に描画されたPin/Marker本体、またはLabel自身)の実表示矩形を、
+	// wrapperEl基準のローカル座標へ変換する。フロント側にはEditorのようなZoom用
+	// transformレイヤーが無いため、実測値(getBoundingClientRect())がそのまま
+	// ローカル単位として使える(倍率変換は不要)。
+	function measureRectRelativeTo( targetEl, wrapperEl ) {
+		if ( ! targetEl || ! wrapperEl ) {
+			return null;
+		}
+		var r = targetEl.getBoundingClientRect();
+		var w = wrapperEl.getBoundingClientRect();
+		if ( r.width <= 0 || r.height <= 0 ) {
+			return null;
+		}
+		return {
+			centerX: r.left + r.width / 2 - w.left,
+			centerY: r.top + r.height / 2 - w.top,
+			width: r.width,
+			height: r.height
+		};
+	}
+
+	// Labelをbutton(.image-pin-block__pin)の外へ切り離し、wrapperElの直接の子として
+	// position: absoluteで独立配置する(Pin本体の周囲を自由な位置で回り込めるように
+	// するため)。初回のみ実行し、以後は位置の再計算のみ行う(位置計算はPin本体自体を
+	// 「Label無しの状態」で測れる必要があり、Label自身がbuttonの中にflexの一員として
+	// 残ったままだと、Pin本体の実際の外形を正しく測れないため)。
+	function detachLabelFromPin( labelEl, wrapperEl ) {
+		if ( labelEl.parentNode === wrapperEl ) {
+			return;
+		}
+		labelEl.classList.add( 'image-pin-block__pin-label--positioned' );
+		wrapperEl.appendChild( labelEl );
+	}
+
+	// pinButtonEl(.image-pin-block__pin。この時点でLabelは既に外へ切り離し済みのため、
+	// 中身はPin/Marker本体のみになっている)自身の実表示矩形をPin/Markerのローカル矩形
+	// として使い、labelElを角丸矩形経路上の位置へ配置する。
+	function positionLabelForPin( wrapperEl, pinButtonEl, labelEl ) {
+		if ( ! wrapperEl || ! pinButtonEl || ! labelEl ) {
+			return;
+		}
+		detachLabelFromPin( labelEl, wrapperEl );
+		var pinRect = measureRectRelativeTo( pinButtonEl, wrapperEl );
+		var labelRect = measureRectRelativeTo( labelEl, wrapperEl );
+		if ( ! pinRect || ! labelRect ) {
+			return;
+		}
+		var hasMarker = pinButtonEl.classList.contains( 'has-marker-image' );
+		var labelPositionAttr = labelEl.getAttribute( 'data-label-position' );
+		var labelPositionRaw = ( null !== labelPositionAttr ) ? parseFloat( labelPositionAttr ) : NaN;
+		var center = computeLabelCenter( labelPositionRaw, hasMarker, pinRect, { width: labelRect.width, height: labelRect.height } );
+		labelEl.style.left = center.x + 'px';
+		labelEl.style.top = center.y + 'px';
+	}
+
 	function isMobileViewport() {
 		return window.matchMedia( '(max-width: ' + MOBILE_BREAKPOINT + 'px)' ).matches;
 	}
@@ -493,6 +693,17 @@
 			}
 		} );
 
+		// 丸マーカーのLabel位置。画像マーカー側(非同期になりうるnaturalWidth取得後)とは
+		// 別に、ここでは丸マーカーの実サイズが確定済み(同期的)であるこの時点で位置を
+		// 確定できる。
+		wrapperEl.querySelectorAll( '.image-pin-block__pin:not(.has-marker-image)' ).forEach( function( pinButtonEl ) {
+			var pinId = pinButtonEl.getAttribute( 'data-pin-id' );
+			var labelEl = pinId ? wrapperEl.querySelector( '.image-pin-block__pin-label[data-pin-id="' + cssEscape( pinId ) + '"]' ) : null;
+			if ( labelEl ) {
+				positionLabelForPin( wrapperEl, pinButtonEl, labelEl );
+			}
+		} );
+
 		// マーカー画像は、実寸(naturalWidth)に対する markerScale(%) を、本体画像の
 		// MARKER_MAX_WIDTH_RATIO を上限としてクランプした実寸px幅で表示する。
 		// transform: scale() だけに頼ると、レイアウト上のサイズ(=ボタン要素の当たり判定)が
@@ -517,6 +728,16 @@
 				// 上記の実寸指定で完全に上書きする(二重に縮小・拡大されないようにするため)。
 				img.style.transform = '';
 				img.style.maxWidth = '';
+
+				// 画像マーカーのLabel位置は、マーカー画像の最終サイズ(上記)が確定した
+				// 直後(同期・非同期どちらの経路でも)に計算する。先にサイズを確定させないと、
+				// Pin本体(button)自身の実測サイズがまだno-JSフォールバック時の値のままになる。
+				var pinButtonEl = img.closest( '.image-pin-block__pin' );
+				var pinId = pinButtonEl ? pinButtonEl.getAttribute( 'data-pin-id' ) : null;
+				var labelEl = pinId ? wrapperEl.querySelector( '.image-pin-block__pin-label[data-pin-id="' + cssEscape( pinId ) + '"]' ) : null;
+				if ( pinButtonEl && labelEl ) {
+					positionLabelForPin( wrapperEl, pinButtonEl, labelEl );
+				}
 			}
 			if ( img.complete && img.naturalWidth ) {
 				applyMarkerSize();

@@ -95,6 +95,15 @@
 	paint-order: stroke fill;
 }
 
+/* Label位置(view.jsのpositionLabelForPin参照)。JS実行後、Labelは.image-pin-block__pin
+   ボタンの外へ切り離され、.image-pin-block__wrapper直下でposition: absoluteの独立要素
+   として配置される(Pin/Markerの周囲を自由な位置(labelPosition)で回り込めるようにする
+   ため)。JS未実行時は従来どおりbutton内のflexレイアウトのまま表示される(no-JS
+   フォールバック)。left/topはJSが実測結果から都度計算して設定する。 */
+.image-pin-block__pin-label--positioned {
+	position: absolute;
+}
+
 /* 縁取りの太さ(列挙値)をpxに変換する。'none'(既定)のときは data-label-stroke-width
    属性自体が出力されないため、上の 0px フォールバックのまま(縁取りなし)になる。 */
 .image-pin-block[data-label-stroke-width="thin"] .image-pin-block__pin-label {
@@ -140,6 +149,15 @@
 	color: inherit;
 	text-decoration: underline;
 	display: block;
+}
+
+/* 説明文の手動改行(Textareaで入力した\n)をそのまま見た目に反映する。PC用ポップオーバー・
+   スマホの説明エリアの両方(.image-pin-block__desc-body を共有)に適用される。長い単語・
+   URL等でpopoverの幅(max-width: 260px)から極端にはみ出さないよう、単語境界に関わらず
+   折り返す。保存データ自体は普通の文字列のまま(<br>等のHTMLは一切挿入しない)。 */
+.image-pin-block__desc-body {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 /* ポップオーバーと同じ4項目(背景不透明度・文字色・縁取り色・縁取り太さ)を

@@ -163,11 +163,26 @@
 			"Save as image": [
 				"画像として保存"
 			],
+			"Your browser does not support saving as an image.": [
+				"ご利用のブラウザは画像としての保存に対応していません。"
+			],
+			"Unable to save the image due to restrictions on an external image.": [
+				"外部画像等の制約により画像を保存できませんでした。"
+			],
+			"Unable to save the image. Please try again.": [
+				"画像の保存に失敗しました。もう一度お試しください。"
+			],
 			"Zoom (%)": [
 				"表示倍率(%)"
 			],
+			"Show entire image": [
+				"全体を表示する"
+			],
 			"Click the image to add a pin.": [
 				"画像をクリックしてピンを追加してください。"
+			],
+			"Pin content": [
+				"ピンの内容"
 			],
 			"Add pin": [
 				"ピンを追加"
@@ -177,6 +192,12 @@
 			],
 			"Add a pin here": [
 				"ここにピンを追加"
+			],
+			"Apply": [
+				"適用"
+			],
+			"Close": [
+				"閉じる"
 			],
 			"Drag to resize": [
 				"ドラッグしてサイズ変更"

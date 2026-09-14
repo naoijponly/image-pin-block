@@ -370,6 +370,19 @@ function image_pin_block_render_callback( $attributes, $content ) {
 					: $marker_scale_default;
 				$marker_factor = number_format( $marker_pct / 100, 3, '.', '' );
 				$show_marker_label = ( ! isset( $pin['showLabel'] ) || (bool) $pin['showLabel'] ) && '' !== $raw_label;
+				// Label位置(角丸矩形経路上の0以上1未満の連続値)。未設定/無効な値のときは
+				// 属性自体を出力しない(view.js側がeditor.jsと同じfallback、丸マーカーは
+				// 右・画像マーカーは下、に相当する位置を使う。resolveLabelPosition参照)。
+				// PHPは実際のLabelの表示サイズ(文字列・フォント)を測れないため、最終的な
+				// 位置計算は常にJS側(view.js)が実際の描画結果を実測して行う。
+				$label_position = '';
+				if ( isset( $pin['labelPosition'] ) && is_numeric( $pin['labelPosition'] ) && is_finite( (float) $pin['labelPosition'] ) ) {
+					$label_position_raw = fmod( (float) $pin['labelPosition'], 1 );
+					if ( $label_position_raw < 0 ) {
+						$label_position_raw += 1;
+					}
+					$label_position = number_format( $label_position_raw, 4, '.', '' );
+				}
 				?>
 				<button
 					type="button"
@@ -388,12 +401,12 @@ function image_pin_block_render_callback( $attributes, $content ) {
 							alt=""
 						/>
 						<?php if ( $show_marker_label ) : ?>
-							<span class="image-pin-block__pin-label" style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;font-size:<?php echo esc_attr( $label_font_size ); ?>px;"><?php echo esc_html( $raw_label ); ?></span>
+							<span class="image-pin-block__pin-label" data-pin-id="<?php echo esc_attr( $pin_id ); ?>"<?php if ( '' !== $label_position ) : ?> data-label-position="<?php echo esc_attr( $label_position ); ?>"<?php endif; ?> style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;font-size:<?php echo esc_attr( $label_font_size ); ?>px;"><?php echo esc_html( $raw_label ); ?></span>
 						<?php endif; ?>
 					<?php else : ?>
 						<span class="image-pin-block__pin-dot" style="width:<?php echo esc_attr( $pin_size ); ?>px;height:<?php echo esc_attr( $pin_size ); ?>px;background-color:<?php echo esc_attr( $pin_color ); ?>;" data-pin-size="<?php echo esc_attr( $pin_size ); ?>" aria-hidden="true"></span>
 						<?php if ( '' !== $raw_label ) : ?>
-							<span class="image-pin-block__pin-label" style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;font-size:<?php echo esc_attr( $label_font_size ); ?>px;"><?php echo esc_html( $raw_label ); ?></span>
+							<span class="image-pin-block__pin-label" data-pin-id="<?php echo esc_attr( $pin_id ); ?>"<?php if ( '' !== $label_position ) : ?> data-label-position="<?php echo esc_attr( $label_position ); ?>"<?php endif; ?> style="background-color:<?php echo esc_attr( $label_bg_color ); ?>;color:<?php echo esc_attr( $label_text_color ); ?>;font-size:<?php echo esc_attr( $label_font_size ); ?>px;"><?php echo esc_html( $raw_label ); ?></span>
 						<?php endif; ?>
 					<?php endif; ?>
 				</button>
