@@ -10,6 +10,10 @@
 	// image-pin-block.php の $label_font_size_default と一致させること。
 	var DEFAULT_LABEL_FONT_SIZE = 12;
 
+	// data-popover-font-size 属性が読めない場合の最終フォールバック値。
+	// image-pin-block.php の $popover_font_size_default と一致させること。
+	var DEFAULT_POPOVER_FONT_SIZE = 12;
+
 	// マーカー画像の表示幅は、本体画像(data-natural-width)に対してこの割合を上限とする。
 	// editor.js / image-pin-block.php の同名比率と必ず一致させること。
 	var MARKER_MAX_WIDTH_RATIO = 0.5;
@@ -460,18 +464,25 @@
 		};
 	}
 
-	// pinSize/markerScale は画像の元解像度(data-natural-width)を基準にした値として
-	// PHP側で出力されているため、実際の表示幅との比率をかけてから描画する。
-	// clientWidth はレイアウト上の幅で transform の影響を受けないため、拡大表示
-	// (transform: scale() でクローン全体を拡大する)の中で呼んでも二重に拡縮されない。
+	// pinSize/markerScale/フォントサイズ系はすべて画像の元解像度(data-natural-width)を
+	// 基準にした値としてPHP側で出力されているため、実際の表示幅との比率をかけてから
+	// 描画する。clientWidth はレイアウト上の幅で transform の影響を受けないため、
+	// 拡大表示(transform: scale() でクローン全体を拡大する)の中で呼んでも二重に
+	// 拡縮されない。applyPinScale() と openPopoverForPin() の両方から使うため
+	// 共通化している。
+	function getWidthRatio( wrapperEl ) {
+		var naturalWidth = parseFloat( wrapperEl.getAttribute( 'data-natural-width' ) ) || 0;
+		var currentWidth = wrapperEl.clientWidth;
+		return ( naturalWidth > 0 && currentWidth > 0 ) ? ( currentWidth / naturalWidth ) : 1;
+	}
+
 	function applyPinScale( wrapperEl ) {
 		if ( ! wrapperEl ) {
 			return;
 		}
-		var naturalWidth = parseFloat( wrapperEl.getAttribute( 'data-natural-width' ) ) || 0;
-		var currentWidth = wrapperEl.clientWidth;
-		var ratio = ( naturalWidth > 0 && currentWidth > 0 ) ? ( currentWidth / naturalWidth ) : 1;
+		var ratio = getWidthRatio( wrapperEl );
 		var labelFontSizeBase = parseFloat( wrapperEl.getAttribute( 'data-label-font-size' ) ) || DEFAULT_LABEL_FONT_SIZE;
+		var naturalWidth = parseFloat( wrapperEl.getAttribute( 'data-natural-width' ) ) || 0;
 
 		wrapperEl.querySelectorAll( '.image-pin-block__pin-dot' ).forEach( function( dot ) {
 			var base = parseFloat( dot.getAttribute( 'data-pin-size' ) ) || 0;
@@ -562,6 +573,12 @@
 			}
 			popoverBodyEl.textContent = '';
 			popoverBodyEl.appendChild( content );
+			// positionPopover() は popoverEl の offsetWidth/offsetHeight を実測して位置を
+			// 決めるため、文字サイズは必ず先に確定させる(後から変えると、文字サイズによって
+			// 変わる幅・高さ分だけ位置がずれる)。Mobile説明エリア(mobilePanelEl)は対象外
+			// (現状どおり文字サイズを変更しない)。
+			var popoverFontSizeBase = parseFloat( wrapperEl.getAttribute( 'data-popover-font-size' ) ) || DEFAULT_POPOVER_FONT_SIZE;
+			popoverEl.style.fontSize = ( popoverFontSizeBase * getWidthRatio( wrapperEl ) ) + 'px';
 			positionPopover( popoverEl, pinEl, wrapperEl );
 			openPinId = pinId;
 		}

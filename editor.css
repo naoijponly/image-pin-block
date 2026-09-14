@@ -82,6 +82,21 @@
 	display: inline-block;
 }
 
+/* 画像マーカーのドラッグリサイズ用ハンドル(v0.1.x系から復元)。選択中のマーカー画像
+   ピンの右下にのみ表示される。 */
+.image-pin-block-editor__marker-resize-handle {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	transform: translate(50%, 50%);
+	background: #1e88e5;
+	border: 2px solid #fff;
+	border-radius: 50%;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+	cursor: nwse-resize;
+	touch-action: none;
+}
+
 .image-pin-block-editor__marker-heading {
 	margin: 16px 0 8px;
 	font-weight: 600;
@@ -230,11 +245,16 @@
 	flex-direction: column;
 }
 
-/* 下段(個別設定)。内容量に応じて際限なく高くなりPreviewを圧迫することがないよう、
-   高さの上限を設け、それを超える分は内部だけでスクロールする(外側は巻き込まない)。 */
+/* 下段(個別設定)。ピンの種類(丸マーカー/画像マーカー)や選択状態によって内容量が
+   変わっても(画像マーカーは項目が増える等)、Previewの位置・サイズへ一切影響させない
+   ため、max-heightではなく固定のheightで高さそのものを一定にする(flex-basis:autoは
+   heightプロパティの値を使うため、内容量には左右されない)。中身が入りきらない分は
+   内部だけでスクロールし(外側は巻き込まない)、入りきらない場合は余白として残す。
+   box-sizingは環境依存にしないよう明示する(paddingがheightへ上乗せされないように)。 */
 .image-pin-block-editor__modal-left-bottom {
 	flex: 0 0 auto;
-	max-height: 280px;
+	box-sizing: border-box;
+	height: clamp( 220px, 24vh, 280px );
 	overflow-y: auto;
 	padding-top: 16px;
 }
@@ -280,6 +300,20 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
+}
+
+/* 「ここにピンを追加」確認メニュー。Pan layerの外(viewportの直接の子)に置くため、
+   Zoom/Panのtransformを一切受けない(常に元のサイズ・クリックした位置に表示される)。 */
+.image-pin-block-editor__pending-menu {
+	position: absolute;
+	transform: translate(-50%, 8px);
+	background: #fff;
+	border: 1px solid #ddd;
+	border-radius: 4px;
+	padding: 4px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+	z-index: 20;
+	white-space: nowrap;
 }
 
 .image-pin-block-editor__modal-canvas .image-pin-block-editor__image {

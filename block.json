@@ -21,6 +21,7 @@
 		"labelBackgroundOpacity": { "type": "number", "default": 100 },
 		"labelStrokeColor": { "type": "string", "default": "#ffffff" },
 		"labelStrokeWidth": { "type": "string", "default": "none" },
+		"popoverFontSize": { "type": "number", "default": 0 },
 		"popoverBackgroundColor": { "type": "string", "default": "" },
 		"popoverBackgroundOpacity": { "type": "number", "default": 100 },
 		"popoverTextColor": { "type": "string", "default": "" },

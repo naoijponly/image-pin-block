@@ -45,10 +45,28 @@
 	var LABEL_FONT_SIZE_MAX = 200;
 	// 画像選択時、labelFontSize が未設定(0)であれば imageWidth のこの割合を初期値にする。
 	var LABEL_FONT_SIZE_AUTO_RATIO = 0.015;
+	// ポップオーバーの文字サイズ(px、画像の元解像度を基準とした値)。ラベルとは独立して
+	// 将来調整できるよう、値はラベルと同一(初期値)でも定数名はPopover専用にする。
+	// block.json の attributes.default、および image-pin-block.php の同名の
+	// 上限・下限と必ず一致させること。
+	var DEFAULT_POPOVER_FONT_SIZE = 12;
+	var POPOVER_FONT_SIZE_MIN = 6;
+	var POPOVER_FONT_SIZE_MAX = 200;
+	// 画像選択時、popoverFontSize が未設定(0)であれば imageWidth のこの割合を初期値にする。
+	var POPOVER_FONT_SIZE_AUTO_RATIO = 0.015;
 	// マーカー画像の表示幅は、本体画像(imageWidth)に対してこの割合を上限とする。
 	// markerScale(%)がどんな値でも、最終的な表示幅がこれを超えないようクランプする。
 	// image-pin-block.php / view.js の同名比率と必ず一致させること。
 	var MARKER_MAX_WIDTH_RATIO = 0.5;
+	// マーカー画像のドラッグリサイズ時、表示幅(px、画面上の実サイズ)がこれより
+	// 小さくならないようにする下限(v0.1.x系から復元)。
+	var MARKER_MIN_DISPLAY_WIDTH_PX = 20;
+	// リサイズハンドルの一辺の長さ(px)。マーカー画像の表示幅の40%を目安にしつつ、
+	// 「小さすぎて掴めない」(下限8px)/「マーカー画像より目立って大きい」(上限18px)の
+	// 両方を避けるようクランプする(v0.1.x系から復元)。
+	var MARKER_RESIZE_HANDLE_RATIO = 0.4;
+	var MARKER_RESIZE_HANDLE_MIN_PX = 8;
+	var MARKER_RESIZE_HANDLE_MAX_PX = 18;
 	// モーダル内Preview viewportの表示倍率(見た目のズームのみ。保存される値には影響しない)。
 	// 100%は「元画像の原寸」ではなく「Preview viewportへ画像全体を最大Fitした状態」を指す。
 	// 100%未満への縮小はできない(Fit状態が最低表示倍率)。
@@ -248,11 +266,13 @@
 	// ピン内部の見た目(丸マーカー+ラベル横並び／画像マーカー+ラベル下表示)を組み立てる。
 	// 編集画面用。フロント側の見た目は image-pin-block.php 側で同じ構造を出力する。
 	// display: { pinSize, pinColor, labelBackgroundColor, labelTextColor, labelFontSize, widthRatio,
-	//            mainImageWidth, markerNaturalWidths, onMarkerImageLoad, registerMarkerImageRef }
-	// (ブロック単位の見た目設定)。registerMarkerImageRefは、モーダル内の画像編集エリアで
-	// ドラッグ移動時の範囲制限に使うDOM参照を登録するためのもの(不要な呼び出し側では省略可)。
+	//            mainImageWidth, markerNaturalWidths, onMarkerImageLoad, registerMarkerImageRef,
+	//            onMarkerResizePointerDown }
+	// (ブロック単位の見た目設定)。registerMarkerImageRef/onMarkerResizePointerDownは、
+	// モーダル内の画像編集エリアでのドラッグ移動・リサイズに使うためのもの(不要な
+	// 呼び出し側では省略可)。isSelected: 画像マーカーのリサイズハンドルを表示するかどうか。
 	// ピンのサイズ・色は丸マーカーのみに適用し、ラベルの背景色・文字色は丸マーカー・画像マーカー共通。
-	function buildPinContent( pin, display ) {
+	function buildPinContent( pin, display, isSelected ) {
 		var ratio = display.widthRatio || 1;
 		var hasLabelText = !! ( pin.label && '' !== pin.label );
 		var labelStyle = Object.assign(
@@ -305,11 +325,33 @@
 				}
 			} );
 
+			// リサイズハンドルは「選択中のマーカー画像ピン」にのみ表示する(操作対象を
+			// 一意にするため)。naturalW未取得(画像読み込み前)の一瞬は、幅計測ができないため
+			// 表示しない。
+			var handleEl = null;
+			if ( isSelected && naturalW > 0 ) {
+				var handleSize = clampToRange( displayWidthPx * MARKER_RESIZE_HANDLE_RATIO, MARKER_RESIZE_HANDLE_MIN_PX, MARKER_RESIZE_HANDLE_MAX_PX );
+				handleEl = el( 'span', {
+					key: 'marker-resize-handle',
+					className: 'image-pin-block-editor__marker-resize-handle',
+					style: { width: handleSize + 'px', height: handleSize + 'px' },
+					title: __( 'Drag to resize', 'image-pin-block' ),
+					onPointerDown: function( evt ) {
+						evt.stopPropagation();
+						if ( display.onMarkerResizePointerDown ) {
+							display.onMarkerResizePointerDown( pin.id, evt );
+						}
+					},
+					onClick: function( evt ) { evt.stopPropagation(); }
+				} );
+			}
+
 			var children = [
 				el(
 					'span',
 					{ key: 'marker-wrap', className: 'image-pin-block-editor__marker-wrap' },
-					markerImageEl
+					markerImageEl,
+					handleEl
 				)
 			];
 			// ラベル未入力のときは代替文字を画面に出さず、画像だけを表示する
@@ -550,6 +592,10 @@
 	function CanvasPopoverPreview( props ) {
 		var pin = props.pin;
 		var s = props.popoverSettings;
+		// ratio: Preview viewportへのFit倍率(modalFitRatio)。呼び出し元の image wrapper
+		// 自体がZoom(transform: scale())の対象であり、このプレビューはその内側に描画される
+		// ため、ここでZoom倍率まで掛けると二重に拡大されてしまう(buildPinContentの
+		// labelFontSizeと同じ考え方)。
 		var hasLabelText = !! ( pin.label && '' !== pin.label );
 		var hasDescriptionText = !! ( pin.description && '' !== pin.description );
 
@@ -568,10 +614,12 @@
 		var labelText = pin.label || '';
 
 		var bgBase = s.backgroundColor || DEFAULT_POPOVER_BG_BASE;
+		var ratio = props.ratio || 1;
 		var boxStyle = Object.assign(
 			{
 				backgroundColor: applyOpacityToColor( bgBase, s.backgroundOpacity ),
 				color: s.textColor || undefined,
+				fontSize: ( s.fontSize * ratio ) + 'px',
 				left: clampPercent( pin.x ) + '%',
 				top: clampPercent( pin.y ) + '%',
 				transform: 'translate(' + ( pin.x > 60 ? 'calc(-100% - 12px)' : '12px' ) + ', ' + ( pin.y < 25 ? '12px' : 'calc(-100% - 12px)' ) + ')'
@@ -619,6 +667,9 @@
 		// backgroundColor/textColor は空文字が「未設定=継承」を表すセンチネル値
 		// (image-pin-block.php と同じ扱い)。
 		var popoverSettings = {
+			fontSize: ( attributes.popoverFontSize && attributes.popoverFontSize >= POPOVER_FONT_SIZE_MIN && attributes.popoverFontSize <= POPOVER_FONT_SIZE_MAX )
+				? attributes.popoverFontSize
+				: DEFAULT_POPOVER_FONT_SIZE,
 			backgroundColor: attributes.popoverBackgroundColor || '',
 			backgroundOpacity: ( typeof attributes.popoverBackgroundOpacity === 'number' && attributes.popoverBackgroundOpacity >= 0 && attributes.popoverBackgroundOpacity <= 100 )
 				? attributes.popoverBackgroundOpacity
@@ -686,6 +737,16 @@
 		var modalPan = modalPanState[ 0 ];
 		var setModalPan = modalPanState[ 1 ];
 
+		// 「ここにピンを追加」確認メニュー(v0.1.x系のpendingMenuを、Preview上のUI
+		// overlayとして復元したもの)。null のとき非表示。
+		// { x, y }: 追加時に使う%座標(画像上の位置)。
+		// { left, top }: メニュー自体の表示位置(px、Preview viewport基準。Pan layer/
+		// Image wrapperのtransform(Zoom・Pan)の外側に描画するため、Zoom/Panで
+		// メニュー自体が拡大・移動することはない)。
+		var pendingMenuState = useState( null );
+		var pendingMenu = pendingMenuState[ 0 ];
+		var setPendingMenu = pendingMenuState[ 1 ];
+
 		// 右側「ブロック全体の設定」のDrawer(狭い画面用)の開閉状態。
 		var isSettingsDrawerOpenState = useState( false );
 		var isSettingsDrawerOpen = isSettingsDrawerOpenState[ 0 ];
@@ -696,6 +757,7 @@
 			setModalZoom( MODAL_ZOOM_DEFAULT );
 			setModalPan( { x: 0, y: 0 } );
 			setIsSettingsDrawerOpen( false );
+			setPendingMenu( null );
 		}
 
 		var wrapperRef = useRef( null );
@@ -804,6 +866,14 @@
 			} );
 		}, [ isModalOpen, modalZoom, modalDisplayWidth, modalDisplayHeight, modalPreviewSize.width, modalPreviewSize.height ] );
 
+		// 「ここにピンを追加」確認メニューは、画像上の特定の位置に紐づくUIのため、
+		// Zoom変更やPreviewのサイズ変更(ブラウザのリサイズ等)があった場合は候補位置の
+		// 意味が薄れるため閉じる(メニュー自体はZoom/Panの対象にしていないため見た目上は
+		// 動かないが、位置がずれた状態で「追加」を押せるままにしないための措置)。
+		useEffect( function() {
+			setPendingMenu( null );
+		}, [ modalZoom, modalPreviewSize.width, modalPreviewSize.height ] );
+
 		// マーカー画像の実寸(naturalWidth、px)をピンIDごとにキャッシュする。
 		// <img> の読み込み完了(onLoad)時に記録し、buildPinContent() が上限クランプの計算に使う
 		// (MARKER_MAX_WIDTH_RATIO 参照)。
@@ -874,25 +944,26 @@
 		var targetOptions = [ { value: '', label: __( '(None selected)', 'image-pin-block' ) } ]
 			.concat( buildHeadingOptions( headingBlocks || [] ) );
 
-		// モーダルを開いたとき、あるいはピンの追加・削除でselectedPinIdが指すピンが
-		// 無くなったときに、編集対象を自動的に選び直す(先頭のピン、無ければnull)。
-		// v0.2.0より前はキャンバス上でクリックして選ぶ方式だったため未選択のまま開く
-		// ことは無かったが、モーダル化後は「開いた時点で何を編集するか」を決める必要がある。
+		// selectedPinIdが指すピンが(Undo等で)存在しなくなった場合にのみnullへ戻す。
+		// 「他のピンが存在するから代わりに先頭を選ぶ」といった代理選択はしない
+		// (未選択はあくまで未選択のまま。selectedPin自体が既にpins.forEachで
+		// 見つからなければnullになる防御的な作りだが、selectedPinId自体も無効な値を
+		// 持ち続けないよう明示的に揃えている)。
 		useEffect( function() {
-			if ( ! isModalOpen ) {
+			if ( selectedPinId === null ) {
 				return;
 			}
 			var exists = pins.some( function( p ) { return p.id === selectedPinId; } );
 			if ( ! exists ) {
-				setSelectedPinId( pins.length ? pins[ 0 ].id : null );
+				setSelectedPinId( null );
 			}
-		}, [ isModalOpen, pins, selectedPinId ] );
+		}, [ pins, selectedPinId ] );
 
 		function updatePins( nextPins ) {
 			setAttributes( { pins: nextPins } );
 		}
 
-		// pinSize/labelFontSize が未設定(0)の場合のみ、新しい画像の幅から自動計算する。
+		// pinSize/labelFontSize/popoverFontSize が未設定(0)の場合のみ、新しい画像の幅から自動計算する。
 		// 一度でも値が設定されていれば(ユーザーの調整、または過去の自動計算のいずれでも)、
 		// 以後の画像変更で上書きしない(ユーザーが調整した値を尊重するため)。
 		function handleSelectImage( media ) {
@@ -908,6 +979,9 @@
 			}
 			if ( ! attributes.labelFontSize && newImageWidth > 0 ) {
 				updates.labelFontSize = clampToRange( Math.round( newImageWidth * LABEL_FONT_SIZE_AUTO_RATIO ), LABEL_FONT_SIZE_MIN, LABEL_FONT_SIZE_MAX );
+			}
+			if ( ! attributes.popoverFontSize && newImageWidth > 0 ) {
+				updates.popoverFontSize = clampToRange( Math.round( newImageWidth * POPOVER_FONT_SIZE_AUTO_RATIO ), POPOVER_FONT_SIZE_MIN, POPOVER_FONT_SIZE_MAX );
 			}
 			setAttributes( updates );
 		}
@@ -941,9 +1015,11 @@
 		// pointerdown。ピン自体のpointerdownは stopPropagation されているため、
 		// ここに来るのは常に「ピン操作ではない」背景操作。
 		//
-		// クリック(ピン追加)とドラッグ(Pan)は、pointer移動距離で区別する
-		// (PAN_CLICK_THRESHOLD_PX未満ならクリック、以上ならPan。手ブレでPan扱いに
-		// ならないよう4〜6px程度を目安にしている)。
+		// クリック(「ここにピンを追加」の表示)とドラッグ(Pan)は、pointer移動距離で
+		// 区別する(PAN_CLICK_THRESHOLD_PX未満ならクリック、以上ならPan。手ブレでPan
+		// 扱いにならないよう4〜6px程度を目安にしている)。クリックの時点ではピンを
+		// 作成しない(pendingMenuを表示するだけ)。実際に画像へsetAttributesするのは
+		// 「ここにピンを追加」ボタン(addPinFromMenu)を押した時点のみ。
 		//
 		// クリックと判定された場合でも、実際の画像の矩形(modalWrapperRef)の外
 		// (黒いletterbox部分)であれば何もしない(isPointInsideRect参照。0〜100%への
@@ -951,6 +1027,8 @@
 		//
 		// Zoom > 100% で画像がPreviewより大きい軸は、letterbox部分からドラッグを
 		// 開始してもPanできる(黒い余白も含めて「画面」全体をドラッグする感覚のため)。
+		// Panが始まった時点(moved=true)でpendingMenuを閉じる(候補位置とドラッグ後の
+		// 見た目がずれるのを避けるため)。
 		function handleViewportPointerDown( evt ) {
 			// ブラウザ既定の画像ドラッグ(ゴースト表示)を防ぐ。既存のピンドラッグ
 			// (handleModalPinPointerDown)と同じ考え方。
@@ -974,6 +1052,7 @@
 				var dy = moveEvt.clientY - startClientY;
 				if ( ! moved && Math.sqrt( dx * dx + dy * dy ) >= PAN_CLICK_THRESHOLD_PX ) {
 					moved = true;
+					setPendingMenu( null );
 				}
 				if ( ! moved ) {
 					return;
@@ -995,7 +1074,7 @@
 
 				// pointercancelは、ブラウザがジェスチャーを中断した場合(コンテキスト
 				// メニュー表示・マルチタッチ等)に発火し、座標が信頼できないため
-				// クリック(ピン追加)扱いにはしない。後片付けのみ行う。
+				// クリック扱いにはしない。後片付けのみ行う。
 				if ( moved || ! endEvt || endEvt.type === 'pointercancel' ) {
 					return;
 				}
@@ -1003,12 +1082,21 @@
 				if ( ! wrapperEl ) {
 					return;
 				}
-				var rect = wrapperEl.getBoundingClientRect();
-				if ( ! isPointInsideRect( endEvt.clientX, endEvt.clientY, rect ) ) {
+				var imageRect = wrapperEl.getBoundingClientRect();
+				if ( ! isPointInsideRect( endEvt.clientX, endEvt.clientY, imageRect ) ) {
 					return;
 				}
-				var point = percentFromClientPoint( endEvt.clientX, endEvt.clientY, rect );
-				createPinAt( point.x, point.y );
+				var point = percentFromClientPoint( endEvt.clientX, endEvt.clientY, imageRect );
+				// メニュー自体の表示位置はviewport基準のpx(Zoom/Panのtransformの外側に
+				// 描画するため、Zoom/Panで一緒に拡大・移動しない)。
+				var viewportRect = viewportEl.getBoundingClientRect();
+				setSelectedPinId( null );
+				setPendingMenu( {
+					x: point.x,
+					y: point.y,
+					left: endEvt.clientX - viewportRect.left,
+					top: endEvt.clientY - viewportRect.top
+				} );
 			}
 
 			viewportEl.addEventListener( 'pointermove', handleMove );
@@ -1016,8 +1104,21 @@
 			viewportEl.addEventListener( 'pointercancel', endDrag );
 		}
 
-		// モーダル内、「ピン一覧」の「+」ボタン。画像中央に新規ピンを追加する。
+		// 「ここにピンを追加」ボタン。pendingMenuのx/yで新規ピンを作成し、選択状態にして
+		// メニューを閉じる。
+		function addPinFromMenu() {
+			if ( ! pendingMenu ) {
+				return;
+			}
+			createPinAt( pendingMenu.x, pendingMenu.y );
+			setPendingMenu( null );
+		}
+
+		// モーダル内、「ピン一覧」の「+」ボタン。画像中央に新規ピンを追加する
+		// (「ここにピンを追加」の確認menuとは別の、明示的な追加手段。確認menuが
+		// 開いていた場合は候補位置の意味が無くなるため閉じる)。
 		function addPinAtCenter() {
+			setPendingMenu( null );
 			createPinAt( 50, 50 );
 		}
 
@@ -1026,6 +1127,7 @@
 			if ( ! selectedPin ) {
 				return;
 			}
+			setPendingMenu( null );
 			var newPin = Object.assign( {}, selectedPin, {
 				id: generatePinId( pins ),
 				x: clampPercent( selectedPin.x + DUPLICATE_OFFSET_PERCENT ),
@@ -1045,6 +1147,7 @@
 		function handleModalPinPointerDown( pinId, evt ) {
 			evt.stopPropagation();
 			evt.preventDefault();
+			setPendingMenu( null );
 			setSelectedPinId( pinId );
 
 			var wrapperEl = modalWrapperRef.current;
@@ -1137,6 +1240,115 @@
 			pinEl.addEventListener( 'pointermove', handleMove );
 			pinEl.addEventListener( 'pointerup', endDrag );
 			pinEl.addEventListener( 'pointercancel', endDrag );
+		}
+
+		// 画像マーカーのドラッグリサイズ(v0.1.x系から復元)。選択中のマーカー画像ピンにのみ
+		// ハンドルが表示されるため、常に「選択中かつ画像マーカーを持つピン」に対して呼ばれる。
+		// handleModalPinPointerDown(位置移動)と同様、setPointerCapture でハンドル要素自身に
+		// 以降の pointermove/pointerup を固定する(handleEl 側で stopPropagation 済みのため
+		// ピン本体側の位置移動ハンドラとは競合しない)。
+		// v0.1.x系との違いは ratio の扱いのみ: v0.1.x系はモーダルが無くwidthRatioのみで
+		// 画面上サイズが決まっていたが、v0.2.0のモーダルはFit(modalFitRatio)適用後の
+		// image wrapperにさらにZoom(modalZoom)をCSS transform: scale()で掛けているため、
+		// 実際の画面上サイズへ変換するには両方を掛け合わせた実効比率が必要になる。
+		// getBoundingClientRect() は常にこの実効比率適用後の実際の見た目を返すため、
+		// containment(はみ出し防止)の測定自体はv0.1.x系から変更していない。
+		function handleMarkerResizePointerDown( pinId, evt ) {
+			evt.preventDefault();
+			var pin = pins.filter( function( p ) { return p.id === pinId; } )[ 0 ];
+			var naturalW = markerNaturalWidths[ pinId ] || 0;
+			var wrapperEl = modalWrapperRef.current;
+			if ( ! pin || naturalW <= 0 || ! wrapperEl ) {
+				return;
+			}
+
+			var ratio = ( modalFitRatio || 1 ) * ( modalZoom / 100 );
+			var mainWidth = attributes.imageWidth || 0;
+			// 本体画像の幅が不明な場合は、markerScale の上限(MARKER_SCALE_MAX)自体を上限とする
+			// (MARKER_MAX_WIDTH_RATIO による追加の上限は適用しない)。
+			var maxBaseWidthFromRatio = ( mainWidth > 0 ) ? ( mainWidth * MARKER_MAX_WIDTH_RATIO ) : ( naturalW * MARKER_SCALE_MAX / 100 );
+
+			// マーカー画像の外形が本体画像の内側に収まるよう、表示幅にもう一つ上限を設ける。
+			// flexboxの中央寄せにより、マーカー画像はラベルの有無・高さに関わらず「自分自身の
+			// 中心点」を軸に拡大縮小される(位置は変わらない)ため、ドラッグ開始時点で測定した
+			// その中心点と本体画像の四辺との距離のうち、最も小さいものが拡大できる限度になる。
+			var markerImgEl = markerImageRefsRef.current[ pinId ];
+			var maxDisplayWidthFromContainment = Number.POSITIVE_INFINITY;
+			if ( markerImgEl ) {
+				var imgRect0 = markerImgEl.getBoundingClientRect();
+				if ( imgRect0.width > 0 && imgRect0.height > 0 ) {
+					var aspectRatio = imgRect0.width / imgRect0.height;
+					var imageCenterX = imgRect0.left + imgRect0.width / 2;
+					var imageCenterY = imgRect0.top + imgRect0.height / 2;
+					var wRect0 = wrapperEl.getBoundingClientRect();
+					var maxWidthFromLeft = 2 * ( imageCenterX - wRect0.left );
+					var maxWidthFromRight = 2 * ( wRect0.right - imageCenterX );
+					var maxWidthFromTop = 2 * ( imageCenterY - wRect0.top ) * aspectRatio;
+					var maxWidthFromBottom = 2 * ( wRect0.bottom - imageCenterY ) * aspectRatio;
+					maxDisplayWidthFromContainment = Math.max( 0, Math.min( maxWidthFromLeft, maxWidthFromRight, maxWidthFromTop, maxWidthFromBottom ) );
+				}
+			}
+
+			// 上記2つの上限(本体画像幅の50%、画像内に収まる範囲)のうち、より厳しい方を採用する。
+			var maxDisplayWidth = Math.min( maxBaseWidthFromRatio * ratio, maxDisplayWidthFromContainment );
+			var maxBaseWidth = maxDisplayWidth / ratio;
+
+			// ドラッグで到達できる markerScale の実効範囲。表示幅の上限・下限(px)を
+			// markerScale(%)に換算し、既存の 1〜500% の範囲内に収める。
+			var effectiveMaxScale = clampToRange( ( maxBaseWidth / naturalW ) * 100, MARKER_SCALE_MIN, MARKER_SCALE_MAX );
+			var minScaleForFloor = ( MARKER_MIN_DISPLAY_WIDTH_PX / ratio / naturalW ) * 100;
+			var effectiveMinScale = clampToRange( minScaleForFloor, MARKER_SCALE_MIN, effectiveMaxScale );
+
+			var startScale = resolveMarkerScale( pin );
+			var startBaseWidth = Math.min( naturalW * ( startScale / 100 ), maxBaseWidth );
+			var startDisplayWidth = startBaseWidth * ratio;
+
+			var pointerId = evt.pointerId;
+			var handleEl = evt.currentTarget;
+			var startClientX = evt.clientX;
+
+			if ( handleEl.setPointerCapture ) {
+				handleEl.setPointerCapture( pointerId );
+			}
+
+			function handleMove( moveEvt ) {
+				if ( moveEvt.pointerId !== pointerId ) {
+					return;
+				}
+				moveEvt.stopPropagation();
+				var deltaX = moveEvt.clientX - startClientX;
+				var newDisplayWidth = clampToRange( startDisplayWidth + deltaX, MARKER_MIN_DISPLAY_WIDTH_PX, maxDisplayWidth );
+				var newScale = ( newDisplayWidth / ratio / naturalW ) * 100;
+				newScale = clampToRange( newScale, effectiveMinScale, effectiveMaxScale );
+				newScale = Math.round( newScale * 10 ) / 10;
+				updatePins(
+					pins.map( function( p ) {
+						if ( p.id !== pinId ) {
+							return p;
+						}
+						return Object.assign( {}, p, { markerScale: newScale } );
+					} )
+				);
+			}
+
+			function endDrag( endEvt ) {
+				if ( endEvt && endEvt.pointerId !== pointerId ) {
+					return;
+				}
+				if ( endEvt ) {
+					endEvt.stopPropagation();
+				}
+				if ( handleEl.hasPointerCapture && handleEl.hasPointerCapture( pointerId ) ) {
+					handleEl.releasePointerCapture( pointerId );
+				}
+				handleEl.removeEventListener( 'pointermove', handleMove );
+				handleEl.removeEventListener( 'pointerup', endDrag );
+				handleEl.removeEventListener( 'pointercancel', endDrag );
+			}
+
+			handleEl.addEventListener( 'pointermove', handleMove );
+			handleEl.addEventListener( 'pointerup', endDrag );
+			handleEl.addEventListener( 'pointercancel', endDrag );
 		}
 
 		// 選択中のピンに複数フィールドをまとめて反映する。
@@ -1269,14 +1481,6 @@
 					defaultValue: DEFAULT_PIN_SIZE,
 					onCommit: function( n ) { setAttributes( { pinSize: n } ); }
 				} ),
-				el( ClampedNumberControl, {
-					label: __( 'Label font size (px)', 'image-pin-block' ),
-					value: displaySettings.labelFontSize,
-					min: LABEL_FONT_SIZE_MIN,
-					max: LABEL_FONT_SIZE_MAX,
-					defaultValue: DEFAULT_LABEL_FONT_SIZE,
-					onCommit: function( n ) { setAttributes( { labelFontSize: n } ); }
-				} ),
 				PanelColorSettings
 					? el( PanelColorSettings, {
 						title: __( 'Pin color', 'image-pin-block' ),
@@ -1306,6 +1510,14 @@
 					} )
 				),
 				el( 'h3', { className: 'image-pin-block-editor__modal-settings-heading' }, __( 'Pin label', 'image-pin-block' ) ),
+				el( ClampedNumberControl, {
+					label: __( 'Label font size (px)', 'image-pin-block' ),
+					value: displaySettings.labelFontSize,
+					min: LABEL_FONT_SIZE_MIN,
+					max: LABEL_FONT_SIZE_MAX,
+					defaultValue: DEFAULT_LABEL_FONT_SIZE,
+					onCommit: function( n ) { setAttributes( { labelFontSize: n } ); }
+				} ),
 				el( ColorInputRow, {
 					label: __( 'Label background color', 'image-pin-block' ),
 					value: displaySettings.labelBackgroundColor,
@@ -1346,6 +1558,14 @@
 					onChange: function( value ) { setAttributes( { labelStrokeWidth: value } ); }
 				} ),
 				el( 'h3', { className: 'image-pin-block-editor__modal-settings-heading' }, __( 'Popover', 'image-pin-block' ) ),
+				el( ClampedNumberControl, {
+					label: __( 'Popover font size (px)', 'image-pin-block' ),
+					value: popoverSettings.fontSize,
+					min: POPOVER_FONT_SIZE_MIN,
+					max: POPOVER_FONT_SIZE_MAX,
+					defaultValue: DEFAULT_POPOVER_FONT_SIZE,
+					onCommit: function( n ) { setAttributes( { popoverFontSize: n } ); }
+				} ),
 				el( ColorInputRow, {
 					label: __( 'Popover background color', 'image-pin-block' ),
 					value: popoverSettings.backgroundColor,
@@ -1415,7 +1635,8 @@
 			labelTextColor: resolveColorPreview( 'labelTextColor', displaySettings.labelTextColor ),
 			labelStrokeColor: resolveColorPreview( 'labelStrokeColor', displaySettings.labelStrokeColor ),
 			widthRatio: modalFitRatio,
-			registerMarkerImageRef: registerMarkerImageRef
+			registerMarkerImageRef: registerMarkerImageRef,
+			onMarkerResizePointerDown: handleMarkerResizePointerDown
 		} );
 		var modalPopoverSettings = Object.assign( {}, popoverSettings, {
 			backgroundColor: resolveColorPreview( 'popoverBackgroundColor', popoverSettings.backgroundColor ),
@@ -1441,7 +1662,7 @@
 					// 同じ位置に意図しない新規ピンが追加されてしまう。
 					onClick: function( evt ) { evt.stopPropagation(); }
 				},
-				buildPinContent( pin, modalDisplaySettings )
+				buildPinContent( pin, modalDisplaySettings, isPinSelected )
 			);
 		} );
 
@@ -1449,7 +1670,7 @@
 		// モーダル内の画像編集エリアの実画像の上に表示する(CanvasPopoverPreview参照。
 		// ラベル・説明文がどちらも空のときは何も表示しない)。
 		var modalPopoverElement = selectedPin
-			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: modalPopoverSettings } )
+			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: modalPopoverSettings, ratio: modalFitRatio } )
 			: null;
 
 		// 「Preview」: モーダル左上の画像編集領域。DOMの責務を4段に分ける
@@ -1461,6 +1682,28 @@
 		// pointerdownはviewport全体(画像+黒いletterbox)で受け、クリックかPanかは
 		// handleViewportPointerDown側で判定する(ピン自体のpointerdownは
 		// stopPropagationされているため、ここには来ない)。
+		// 「ここにピンを追加」確認メニュー。Preview viewportの直接の子として、Pan layer
+		// (Zoom/Panのtransformを受ける層)の外に描画することで、メニュー自体は
+		// Zoom/Panの影響を受けない(画像・ピンだけが拡大縮小・移動する)。
+		// メニュー自身のpointerdown/clickはstopPropagationし、viewport側の
+		// handleViewportPointerDown(Pan/クリック判定)に伝わらないようにする。
+		var pendingMenuElement = pendingMenu
+			? el(
+				'div',
+				{
+					className: 'image-pin-block-editor__pending-menu',
+					style: { left: pendingMenu.left + 'px', top: pendingMenu.top + 'px' },
+					onPointerDown: function( evt ) { evt.stopPropagation(); },
+					onClick: function( evt ) { evt.stopPropagation(); }
+				},
+				el(
+					Button,
+					{ variant: 'secondary', onClick: addPinFromMenu },
+					__( 'Add a pin here', 'image-pin-block' )
+				)
+			)
+			: null;
+
 		var modalImageArea = el(
 			'div',
 			{ className: 'image-pin-block-editor__modal-preview-host', ref: modalPreviewHostRef },
@@ -1498,7 +1741,8 @@
 						modalPinElements,
 						modalPopoverElement
 					)
-				)
+				),
+				pendingMenuElement
 			)
 		);
 
@@ -1518,7 +1762,7 @@
 							key: pin.id,
 							variant: ( pin.id === selectedPinId ) ? 'primary' : 'secondary',
 							className: 'image-pin-block-editor__pin-tab',
-							onClick: function() { setSelectedPinId( pin.id ); }
+							onClick: function() { setPendingMenu( null ); setSelectedPinId( pin.id ); }
 						},
 						pin.label || ( __( 'Pin', 'image-pin-block' ) + ' ' + ( index + 1 ) )
 					);
@@ -1571,8 +1815,10 @@
 
 		// モーダル左下段(個別設定): 選択中のピンだけに対する設定。カードにはせず、
 		// 「ラベル・遷移先」「説明」「マーカー画像」の3列+区切り線で構成する。
-		// ラベル入力欄は showLabel の状態に関わらず常に表示する(「Show label」は
-		// マーカー画像の見た目にのみ影響し、入力欄自体の表示/非表示には使わない)。
+		// ラベル入力欄は showLabel の状態に関わらず常に同じ場所に表示する。Show label
+		// OFF(画像マーカーのみ)のときは非表示ではなく disabled にして、既存の入力文字列を
+		// 一切消さずに保持する(再度ONにしたとき、直前の文字列がそのまま復元されるようにする)。
+		var isLabelInputDisabled = !! ( selectedPin && selectedPin.markerImageUrl && selectedPin.showLabel === false );
 		var modalLeftBottom = el(
 			'div',
 			{ className: 'image-pin-block-editor__modal-left-bottom' },
@@ -1586,6 +1832,7 @@
 						el( TextControl, {
 							label: __( 'Label', 'image-pin-block' ),
 							value: selectedPin.label,
+							disabled: isLabelInputDisabled,
 							onChange: function( value ) { updateSelectedPin( 'label', value ); }
 						} ),
 						selectedPin.markerImageUrl
@@ -1669,12 +1916,13 @@
 								} )
 							),
 						selectedPin.markerImageUrl
-							// key にピンIDを含め、ピンを切り替えたときにClampedNumberControlの
-							// 下書き状態(内部useState)を新しい値でリセットする
+							// key にピンIDと現在のmarkerScaleを含め、ピンを切り替えたときだけでなく
+							// ドラッグリサイズハンドル側でmarkerScaleが変わったときにも
+							// ClampedNumberControlの下書き状態(内部useState)を新しい値でリセットする
 							// (ClampedNumberControlは制御コンポーネントではないため、keyを
 							// 変えず値だけ変えても表示が追従しない)。
 							? el( ClampedNumberControl, {
-								key: selectedPinId,
+								key: selectedPinId + ':' + ( selectedPin.markerScale || DEFAULT_MARKER_SCALE ),
 								label: __( 'Marker image scale (%)', 'image-pin-block' ),
 								value: selectedPin.markerScale || DEFAULT_MARKER_SCALE,
 								min: MARKER_SCALE_MIN,
@@ -1720,6 +1968,16 @@
 					onRequestClose: closeModal,
 					isFullScreen: true,
 					className: 'image-pin-block-editor__modal',
+					// Escで「ここにピンを追加」メニューが開いていればまずそれだけを閉じ、
+					// フルスクリーンの編集画面自体は閉じない。Modal自体のEscape処理は
+					// このonKeyDownより外側(祖先要素)にあるため、stopPropagationすれば
+					// そちらまでは伝播しない。
+					onKeyDown: function( evt ) {
+						if ( evt.key === 'Escape' && pendingMenu ) {
+							evt.stopPropagation();
+							setPendingMenu( null );
+						}
+					},
 					headerActions: [
 						el( Button, {
 							key: 'settings-toggle',
@@ -1788,6 +2046,7 @@
 			labelBackgroundOpacity: { type: 'number', default: DEFAULT_BG_OPACITY },
 			labelStrokeColor: { type: 'string', default: DEFAULT_STROKE_COLOR },
 			labelStrokeWidth: { type: 'string', default: DEFAULT_STROKE_WIDTH },
+			popoverFontSize: { type: 'number', default: 0 },
 			// 空文字は「未設定=現行の見た目(白背景・テーマの文字色継承)を維持する」センチネル値。
 			popoverBackgroundColor: { type: 'string', default: '' },
 			popoverBackgroundOpacity: { type: 'number', default: DEFAULT_BG_OPACITY },

@@ -254,6 +254,17 @@ function image_pin_block_render_callback( $attributes, $content ) {
 		: 'none';
 	$label_stroke_color = image_pin_block_sanitize_color( isset( $attributes['labelStrokeColor'] ) ? $attributes['labelStrokeColor'] : '', '#ffffff' );
 
+	// ポップオーバーの文字サイズ(px、画像の元解像度を基準とした値)。$label_font_size と
+	// 同じ考え方だが、将来ラベルとは独立して調整できるよう変数・上限下限は分けている。
+	// 上限・下限は editor.js の POPOVER_FONT_SIZE_MIN/MAX と必ず一致させること。
+	$popover_font_size_min     = 6;
+	$popover_font_size_max     = 200;
+	$popover_font_size_default = 12;
+	$popover_font_size = ( isset( $attributes['popoverFontSize'] ) && is_numeric( $attributes['popoverFontSize'] )
+		&& (float) $attributes['popoverFontSize'] >= $popover_font_size_min && (float) $attributes['popoverFontSize'] <= $popover_font_size_max )
+		? (float) $attributes['popoverFontSize']
+		: $popover_font_size_default;
+
 	// ポップオーバー(PC用吹き出し)・スマホの説明エリア共通の背景色・文字色・縁取り。
 	// 背景色/文字色は新規属性のため、未設定(空文字)を「現行の見た目(白背景・テーマの
 	// 文字色を継承)を維持する」ためのセンチネル値として扱う(空なら何も出力しない)。
@@ -311,7 +322,7 @@ function image_pin_block_render_callback( $attributes, $content ) {
 	ob_start();
 	?>
 	<div class="image-pin-block" data-pc-behavior="<?php echo esc_attr( $pc_behavior ); ?>" data-mobile-behavior="<?php echo esc_attr( $mobile_behavior ); ?>"<?php if ( 'none' !== $label_stroke_width ) : ?> data-label-stroke-width="<?php echo esc_attr( $label_stroke_width ); ?>"<?php endif; ?><?php if ( 'none' !== $popover_stroke_width ) : ?> data-popover-stroke-width="<?php echo esc_attr( $popover_stroke_width ); ?>"<?php endif; ?><?php if ( ! empty( $root_custom_props ) ) : ?> style="<?php foreach ( $root_custom_props as $prop_name => $prop_value ) { echo esc_attr( $prop_name ) . ':' . esc_attr( $prop_value ) . ';'; } ?>"<?php endif; ?>>
-		<div class="image-pin-block__wrapper" data-natural-width="<?php echo esc_attr( $image_width ); ?>" data-label-font-size="<?php echo esc_attr( $label_font_size ); ?>">
+		<div class="image-pin-block__wrapper" data-natural-width="<?php echo esc_attr( $image_width ); ?>" data-label-font-size="<?php echo esc_attr( $label_font_size ); ?>" data-popover-font-size="<?php echo esc_attr( $popover_font_size ); ?>">
 			<img
 				class="image-pin-block__image"
 				src="<?php echo esc_url( $image_url ); ?>"

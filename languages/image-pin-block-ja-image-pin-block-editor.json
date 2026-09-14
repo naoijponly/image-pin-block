@@ -88,6 +88,9 @@
 			"Popover": [
 				"ポップオーバー"
 			],
+			"Popover font size (px)": [
+				"ポップオーバーの文字サイズ(px)"
+			],
 			"Popover background color": [
 				"ポップオーバーの背景色"
 			],
@@ -171,6 +174,12 @@
 			],
 			"Duplicate pin": [
 				"ピンを複製"
+			],
+			"Add a pin here": [
+				"ここにピンを追加"
+			],
+			"Drag to resize": [
+				"ドラッグしてサイズ変更"
 			]
 		}
 	}
