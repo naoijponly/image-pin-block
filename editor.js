@@ -17,6 +17,7 @@
 	var SelectControl = components.SelectControl;
 	var CheckboxControl = components.CheckboxControl;
 	var RangeControl = components.RangeControl;
+	var Tooltip = components.Tooltip;
 	var Dropdown = components.Dropdown;
 	var ColorPicker = components.ColorPicker;
 	var useSelect = data.useSelect;
@@ -282,6 +283,34 @@
 			);
 		}
 		return dotChildren;
+	}
+
+	// ラベル横に付ける「?」ヘルプアイコン。ホバー/フォーカスしたときだけ Tooltip で
+	// 文言を表示する(常時表示だと長いヘルプ文が個別設定エリアの高さを圧迫するため、
+	// v0.2.0でこの形にした)。tabIndexを付け、キーボード操作でもフォーカスして
+	// 内容を確認できるようにする。
+	function HelpTooltip( props ) {
+		return el(
+			Tooltip,
+			{ text: props.text },
+			el( 'span', {
+				className: 'image-pin-block-editor__help-icon',
+				tabIndex: 0,
+				role: 'img',
+				'aria-label': props.text
+			}, '?' )
+		);
+	}
+
+	// TextControl/SelectControl の label は文字列だけでなく要素も渡せるため、
+	// 「ラベル文字列 + ヘルプアイコン」をまとめた1要素をlabelプロパティに渡す。
+	function buildLabelWithHelp( label, helpText ) {
+		return el(
+			'span',
+			{ className: 'image-pin-block-editor__label-with-help' },
+			label,
+			el( HelpTooltip, { text: helpText } )
+		);
 	}
 
 	// 数値入力欄: 入力中はバリデーションしない下書き状態を保持し、blur/Enterで確定する。
@@ -1389,15 +1418,19 @@
 							} )
 							: null,
 						el( SelectControl, {
-							label: __( 'Choose target heading', 'image-pin-block' ),
-							help: __( 'Only heading blocks with an HTML anchor set appear as options. If the heading you want isn\'t listed, set an HTML anchor for it under Advanced settings, or type the anchor name directly in the field below.', 'image-pin-block' ),
+							label: buildLabelWithHelp(
+								__( 'Choose target heading', 'image-pin-block' ),
+								__( 'Only heading blocks with an HTML anchor set appear as options. If the heading you want isn\'t listed, set an HTML anchor for it under Advanced settings, or type the anchor name directly in the field below.', 'image-pin-block' )
+							),
 							value: selectedPin.target,
 							options: targetOptions,
 							onChange: function( value ) { updateSelectedPin( 'target', value ); }
 						} ),
 						el( TextControl, {
-							label: __( 'Enter target anchor manually', 'image-pin-block' ),
-							help: __( 'For destinations that don\'t appear in the dropdown, such as non-heading blocks, enter the anchor name directly. You don\'t need to include the # symbol.', 'image-pin-block' ),
+							label: buildLabelWithHelp(
+								__( 'Enter target anchor manually', 'image-pin-block' ),
+								__( 'For destinations that don\'t appear in the dropdown, such as non-heading blocks, enter the anchor name directly. You don\'t need to include the # symbol.', 'image-pin-block' )
+							),
 							value: selectedPin.target,
 							onChange: function( value ) { updateSelectedPin( 'target', value.replace( /#/g, '' ).trim() ); }
 						} )

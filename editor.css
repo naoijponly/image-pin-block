@@ -213,11 +213,14 @@
    minmax(0, 1fr) を明示することで、行の高さは常にこのグリッド自身の
    利用可能な高さ(=モーダルの85vhから決まる、コンテンツ量に左右されない
    固定値)に固定され、はみ出す分は各カラム内でスクロールするようになる。 */
+/* 列側も同じ理由(暗黙のmin-widthがautoになる)でminmax(0, ...)にする。
+   素の "3fr 2fr" のままだと、右カラムの中身(ラベルの長い項目等)が3fr:2frの
+   本来の配分を超えて広がろうとし、想定より狭い/広い幅の奪い合いが起きる。 */
 .image-pin-block-editor__modal-grid {
 	flex: 1;
 	min-height: 0;
 	display: grid;
-	grid-template-columns: 3fr 2fr;
+	grid-template-columns: minmax( 0, 3fr ) minmax( 0, 2fr );
 	grid-template-rows: minmax( 0, 1fr );
 }
 
@@ -231,9 +234,18 @@
 	overflow: hidden;
 }
 
+/* 上段(画像編集エリア+表示倍率+ピン一覧)。画像を主役にするため、下段(個別設定)より
+   確実に大きい取り分になるよう min-height: 60% を明示する(左カラムの高さのうち
+   最低60%を上段に割り当て、下段の中身の量に関わらずこの下限は保証される)。
+   下段(flex: 0 0 auto)がこの残り(最大40%)に収まらないほど肥大化した場合は、
+   .image-pin-block-editor__modal-left の overflow: hidden により下段の一部が
+   見えなくなる(下段はスクロールさせない方針のため。実用上問題が出るようであれば
+   別途相談する)。通常時は下段の中身(ヘルプ文をツールチップ化したため大幅に
+   コンパクトになった)がこの40%よりかなり小さいため、flex: 1 1 auto により
+   上段(画像)は60%よりもさらに大きい取り分を得る。 */
 .image-pin-block-editor__modal-left-top {
 	flex: 1 1 auto;
-	min-height: 0;
+	min-height: 60%;
 	display: flex;
 	flex-direction: column;
 }
@@ -301,11 +313,18 @@
 	border-top: 1px solid #ddd;
 }
 
-/* 個別設定(選択中のピンのみが対象。カードにはせず、区切り線を持つ3列に並べる)。 */
+/* 個別設定(選択中のピンのみが対象。カードにはせず、区切り線を持つ3列に並べる)。
+   列をminmax(0, 1fr)にし、各列にもmin-width: 0を明示する。素の1fr・min-width:auto
+   (既定)のままだと、長い文字列(ヘルプ文等)を含む列が本来の1/3幅を超えて広がろうと
+   し、列同士が重なって見える不具合があった。 */
 .image-pin-block-editor__modal-individual-grid {
 	display: grid;
-	grid-template-columns: 1fr 1fr 1fr;
+	grid-template-columns: minmax( 0, 1fr ) minmax( 0, 1fr ) minmax( 0, 1fr );
 	gap: 0 20px;
+}
+
+.image-pin-block-editor__modal-individual-col {
+	min-width: 0;
 }
 
 .image-pin-block-editor__modal-individual-col:not(:last-child) {
@@ -316,6 +335,30 @@
 .image-pin-block-editor__modal-individual-empty {
 	color: #757575;
 	font-style: italic;
+}
+
+/* ラベル横の「?」ヘルプアイコン(Tooltipで文言を表示。常時表示だと長い文言が
+   個別設定エリアの高さを圧迫していたため、v0.2.0でこの形に変更した)。 */
+.image-pin-block-editor__label-with-help {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.image-pin-block-editor__help-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: #757575;
+	color: #fff;
+	font-size: 10px;
+	font-style: normal;
+	line-height: 1;
+	cursor: help;
 }
 
 @media ( max-width: 782px ) {
