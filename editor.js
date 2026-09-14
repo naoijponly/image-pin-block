@@ -86,17 +86,31 @@
 	var PAN_CLICK_THRESHOLD_PX = 5;
 	// 新規ピンを複製したとき、元のピンと重ならないようにずらす量(%)。
 	var DUPLICATE_OFFSET_PERCENT = 4;
-	// Label位置(Pin/Markerを囲む円)関連。すべてローカル単位(Fit適用後・Zoom適用前のpx。
-	// Zoomはimage wrapper自体へのtransform: scale()で別途掛かるため、ここに含めない)。
-	// 260915: 角丸矩形の外周(弧長ベース)から、Pin/Markerを囲む円周(角度ベース)へ
-	// 方式を変更した。辺→角の遷移部分でLabelが外側へ「ぽこっ」と膨らんで見える
-	// (円周方式には存在しない不具合)問題を解消するため。labelPositionの保存形式・
-	// 意味(0以上1未満の一周する連続値)自体は変更していない。
-	// LABEL_GAP: 円周(Pin/Markerの外接円)からLabel自身の縁までの追加の余白。
+	// Label位置(Pin/Marker+Label寸法込みの「安全矩形」を小さく角丸化した軌道)関連。
+	// すべてローカル単位(Fit適用後・Zoom適用前のpx。Zoomはimage wrapper自体への
+	// transform: scale()で別途掛かるため、ここに含めない)。
+	// 経緯: 260914 角丸矩形(弧長ベース) → 260915 Pin/Marker外接円(角度ベース。
+	// ただしLabel自身のサイズを角度依存のsupport distanceとして加算していたため、
+	// 真円上を移動する際に数か所で外側へ「ぽこっ」と膨らんで見えた) → 260916 真円化
+	// (support distanceを角度非依存の一定値labelRadiusへ置き換えたが、今度は横長の
+	// Labelで上下方向に必要以上へ離れてしまう問題が残った) → 260917 現在の方式
+	// (Label寸法を最初から「安全矩形」自体に含め、その矩形を小さく角丸化した軌道へ
+	// angle方向のrayを当てて交点を求める。位置決定後にsupport distance等でさらに
+	// 外側へ押し出す処理は行わない)。labelPositionの保存形式・意味
+	// (0以上1未満の一周する連続値。0=右, 0.25=下, 0.5=左, 0.75=上)は最初から変更していない。
+	// LABEL_GAP: 安全矩形自体に含める、Pin/MarkerとLabelの間の追加の余白。
 	var LABEL_GAP = 6;
+	// LABEL_SAFE_CORNER_RADIUS_*: 安全矩形の角を丸めるための半径。あくまで90度の
+	// 方向転換を見た目上滑らかにするためだけの小さい値であり、Pin/MarkerやLabelの
+	// 寸法(特にlabelWidth)からは意図的に算出しない(横長Labelでも角丸が巨大化しない
+	// ようにするため)。labelHeightを基準にした小さい比率+min/maxクランプとする。
+	// 値の調整はここ1箇所で行う。
+	var LABEL_SAFE_CORNER_RADIUS_RATIO = 0.22;
+	var LABEL_SAFE_CORNER_RADIUS_MIN = 4;
+	var LABEL_SAFE_CORNER_RADIUS_MAX = 14;
 	// labelPositionが未設定の既存ピンのfallback位置(角度をlabelPositionと同じ
 	// 0〜1の値で表したもの。0=右、0.25=下、0.5=左、0.75=上)。丸マーカーは右、
-	// 画像マーカーは下、という角丸矩形方式のときと同じ見た目に合わせている。
+	// 画像マーカーは下、という以前からの見た目に合わせている。
 	var LABEL_POSITION_FALLBACK_ROUND = 0;
 	var LABEL_POSITION_FALLBACK_MARKER = 0.25;
 
@@ -168,20 +182,30 @@
 		return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 	}
 
-	// ─── Label位置(Pin/Markerを囲む円周)用の純粋なジオメトリ計算 ───
-	// Pin/Markerの周囲を「辺」「角」で場合分けしない、360度連続した円周上の位置として
-	// 扱う(角丸矩形の弧長方式では、辺→角の遷移部分でLabelが外側へ「ぽこっ」と
-	// 膨らんで見えたため、円周方式へ変更した)。editor.js・view.js の両方で同じ
-	// ロジックを使う(コードの共有機構が無いため、内容を同一に保ったまま複製している。
-	// 変更する場合は両方に同じ修正を適用すること)。
+	// ─── Label位置(Label寸法込みの「安全矩形」を小さく角丸化した軌道)用の
+	// 純粋なジオメトリ計算 ───
+	// Pin/Markerの周囲を「辺」「角」で場合分けしない、連続した軌道上の位置として扱う。
+	// editor.js・view.js の両方で同じロジックを使う(コードの共有機構が無いため、
+	// 内容を同一に保ったまま複製している。変更する場合は両方に同じ修正を適用すること)。
 	//
-	// labelPosition(0以上1未満)をそのまま「円周上の角度」として解釈する
-	// (angle = labelPosition * 2π)。角度0を基準(右)とし、角度が増える向きは
-	// スクリーン座標系(y下向き)で時計回りになる(右→下→左→上→右)。
+	// labelPosition(0以上1未満)をそのまま「角度」として解釈する(角度自体の意味は
+	// 260914の角丸矩形方式のときから一貫して変更していない: angle = labelPosition * 2π。
+	// 角度0を基準(右)とし、角度が増える向きはスクリーン座標系(y下向き)で時計回りに
+	// なる(右→下→左→上→右))。
+	//
+	// 軌道の決め方(260917〜): Pin/Marker中心を原点として、
+	//   safeHalfX = targetWidth/2 + labelWidth/2 + LABEL_GAP
+	//   safeHalfY = targetHeight/2 + labelHeight/2 + LABEL_GAP
+	// という「これより内側にLabel中心が入るとPin/Markerと重なる」半径(安全矩形。
+	// 2つの軸並行矩形の非重なり条件からそのまま導かれる)を求め、この安全矩形を
+	// 半径LABEL_SAFE_CORNER_RADIUSの円でMinkowski和的に外側へ丸めた形の境界を、
+	// angle方向のrayとの交点として最終的なLabel中心を求める(roundedBoxRayDistance)。
+	// Label自身の寸法は最初から安全矩形の定義(safeHalfX/safeHalfY)に含まれているため、
+	// 軌道決定後にsupport distance等でさらに外側へ押し出す処理は行わない(行うと
+	// 260915〜260916で見られた「ぽこっ」の再発・過剰な距離の原因になる)。
 
 	// pinオブジェクトのlabelPositionを0以上1未満へ正規化して返す。無効/未設定の
-	// 場合は、pinの種類(丸マーカー/画像マーカー)ごとのfallback位置を返す
-	// (角丸矩形方式のときと同じ見た目: 丸マーカーは右、画像マーカーは下)。
+	// 場合は、pinの種類(丸マーカー/画像マーカー)ごとのfallback位置を返す。
 	function resolveLabelPosition( pin ) {
 		if ( typeof pin.labelPosition === 'number' && isFinite( pin.labelPosition ) ) {
 			var t = pin.labelPosition % 1;
@@ -193,30 +217,49 @@
 		return pin.markerImageUrl ? LABEL_POSITION_FALLBACK_MARKER : LABEL_POSITION_FALLBACK_ROUND;
 	}
 
-	// Pin/Markerの外接円上での、Label中心の「Pin/Marker中心からのオフセット」を求める。
-	//   1. targetWidth/targetHeight(Pin/Markerの実表示矩形)から外接円半径targetRadiusを
-	//      求める(矩形の四隅が必ず円内に収まる最小半径)。
-	//   2. Label自身の幅・高さから、Label矩形全体を包む半径labelRadius
-	//      (sqrt((labelWidth/2)^2 + (labelHeight/2)^2))を求める。
-	//   3. Label中心までの距離を targetRadius + LABEL_GAP + labelRadius とする。
-	//      260916: 以前はここに角度依存の support distance
-	//      (abs(nx)*labelWidth/2 + abs(ny)*labelHeight/2)を加えていたが、angleによって
-	//      距離が変化するため、Label中心の軌道が真円にならず、辺→角の遷移で外側へ
-	//      「ぽこっ」と膨らんで見える不具合があった。labelRadius(角度に依存しない一定値)
-	//      へ置き換えることで、distance自体がangleに依存しなくなり、Label中心が
-	//      常に半径一定の真円上を移動するようにした(横長・縦長のLabelでは、対角線基準の
-	//      ため上下または左右方向で必要以上に離れることがあるが、意図的に許容している。
-	//      優先順位は「食い込まない」>「真円」>「距離を詰める」)。
-	//   4. labelPositionから求めた角度の単位方向ベクトル(cos, sin)に、その距離を
-	//      掛けた点をLabelの中心とする。
-	function calculateCircleLabelOffset( targetWidth, targetHeight, labelPosition, labelSize ) {
+	// 原点中心・半径(halfWidth, halfHeight)の軸並行矩形を、半径radiusの円で外側へ
+	// 丸めた形の符号付き距離関数(signed distance function)。0が境界、負が内側、
+	// 正が外側(標準的なrounded-box SDF)。
+	function roundedBoxSdf( x, y, halfWidth, halfHeight, radius ) {
+		var qx = Math.abs( x ) - halfWidth;
+		var qy = Math.abs( y ) - halfHeight;
+		var ox = Math.max( qx, 0 );
+		var oy = Math.max( qy, 0 );
+		return Math.sqrt( ox * ox + oy * oy ) + Math.min( Math.max( qx, qy ), 0 ) - radius;
+	}
+
+	// 原点(Pin/Marker中心)からangle方向へ伸ばしたrayが、上記のrounded-box境界と
+	// 交わる距離を二分探索で求める。side/corner等の場合分けをせず、SDFが0になる点を
+	// 数値的に探すだけの単純な処理のため、角での状態切り替え(ジャンプ・震えの原因)が
+	// 原理的に発生しない。30回の反復で十分な精度(範囲/2^30)に収束する
+	// (Pin数は通常少数のため、この程度の軽量な反復は実用上問題にならない)。
+	function findRoundedBoxRayDistance( angle, safeHalfX, safeHalfY, radius ) {
+		var dx = Math.cos( angle );
+		var dy = Math.sin( angle );
+		var lo = 0;
+		var hi = safeHalfX + safeHalfY + radius + 1;
+		for ( var i = 0; i < 30; i++ ) {
+			var mid = ( lo + hi ) / 2;
+			var d = roundedBoxSdf( dx * mid, dy * mid, safeHalfX, safeHalfY, radius );
+			if ( d < 0 ) {
+				lo = mid;
+			} else {
+				hi = mid;
+			}
+		}
+		return ( lo + hi ) / 2;
+	}
+
+	// Pin/Markerの実表示矩形(targetWidth/targetHeight)とLabel自身の実表示サイズ
+	// (labelSize.width/height)から、Label中心の「Pin/Marker中心からのオフセット」を
+	// 求める。
+	function calculateLabelOffset( targetWidth, targetHeight, labelPosition, labelSize ) {
 		var angle = labelPosition * Math.PI * 2;
-		var nx = Math.cos( angle );
-		var ny = Math.sin( angle );
-		var targetRadius = Math.sqrt( Math.pow( targetWidth / 2, 2 ) + Math.pow( targetHeight / 2, 2 ) );
-		var labelRadius = Math.sqrt( Math.pow( labelSize.width / 2, 2 ) + Math.pow( labelSize.height / 2, 2 ) );
-		var distance = targetRadius + LABEL_GAP + labelRadius;
-		return { x: nx * distance, y: ny * distance, nx: nx, ny: ny };
+		var safeHalfX = targetWidth / 2 + labelSize.width / 2 + LABEL_GAP;
+		var safeHalfY = targetHeight / 2 + labelSize.height / 2 + LABEL_GAP;
+		var cornerRadius = clampToRange( labelSize.height * LABEL_SAFE_CORNER_RADIUS_RATIO, LABEL_SAFE_CORNER_RADIUS_MIN, LABEL_SAFE_CORNER_RADIUS_MAX );
+		var distance = findRoundedBoxRayDistance( angle, safeHalfX, safeHalfY, cornerRadius );
+		return { x: Math.cos( angle ) * distance, y: Math.sin( angle ) * distance };
 	}
 
 	// Pin/Markerのローカル矩形(pinLocalRect: centerX, centerY, width, height)と、
@@ -225,7 +268,7 @@
 	// (markerImageUrlの有無)に使う。
 	function computeLabelCenter( pin, pinLocalRect, labelLocalSize ) {
 		var t = resolveLabelPosition( pin );
-		var offset = calculateCircleLabelOffset( pinLocalRect.width, pinLocalRect.height, t, labelLocalSize );
+		var offset = calculateLabelOffset( pinLocalRect.width, pinLocalRect.height, t, labelLocalSize );
 		return { x: pinLocalRect.centerX + offset.x, y: pinLocalRect.centerY + offset.y, t: t };
 	}
 

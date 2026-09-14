@@ -18,15 +18,23 @@
 	// editor.js / image-pin-block.php の同名比率と必ず一致させること。
 	var MARKER_MAX_WIDTH_RATIO = 0.5;
 
-	// Label位置(Pin/Markerを囲む円)関連の定数。editor.js の同名定数と必ず一致させること
-	// (Editor/Frontendで見た目がずれないようにするため)。260915: 角丸矩形の外周
-	// (弧長ベース)から円周(角度ベース)へ方式を変更した。詳細はeditor.js側の
-	// コメント参照。
+	// Label位置(Label寸法込みの「安全矩形」を小さく角丸化した軌道)関連の定数。
+	// editor.js の同名定数と必ず一致させること(Editor/Frontendで見た目がずれない
+	// ようにするため)。経緯は editor.js 側のコメント参照(260914 角丸矩形(弧長)
+	// → 260915 外接円(角度、角度依存support) → 260916 真円化(角度非依存の
+	// labelRadius) → 260917 現在: Label寸法を最初から含めた安全矩形を角丸化)。
 	var LABEL_GAP = 6;
+	var LABEL_SAFE_CORNER_RADIUS_RATIO = 0.22;
+	var LABEL_SAFE_CORNER_RADIUS_MIN = 4;
+	var LABEL_SAFE_CORNER_RADIUS_MAX = 14;
 	var LABEL_POSITION_FALLBACK_ROUND = 0;
 	var LABEL_POSITION_FALLBACK_MARKER = 0.25;
 
-	// ─── Label位置(Pin/Markerを囲む円周)用の純粋なジオメトリ計算 ───
+	function clampToRange( n, min, max ) {
+		return Math.min( max, Math.max( min, n ) );
+	}
+
+	// ─── Label位置用の純粋なジオメトリ計算 ───
 	// editor.js の同名関数と実装を同一に保つこと(コードの共有機構が無いため複製している。
 	// 詳細なコメントは editor.js 側を参照)。
 
@@ -44,18 +52,41 @@
 		return hasMarker ? LABEL_POSITION_FALLBACK_MARKER : LABEL_POSITION_FALLBACK_ROUND;
 	}
 
-	// 260916: Label中心までの距離をangleに依存させない(真円上を移動させる)。
-	// targetRadius(Pin/Markerの外接円半径)+LABEL_GAP+labelRadius(Label矩形全体を
-	// 包む半径)は、いずれもangleに依存しない定数のため、distance自体が一定になる。
-	// 詳細はeditor.js側のcalculateCircleLabelOffsetのコメント参照。
-	function calculateCircleLabelOffset( targetWidth, targetHeight, labelPosition, labelSize ) {
+	function roundedBoxSdf( x, y, halfWidth, halfHeight, radius ) {
+		var qx = Math.abs( x ) - halfWidth;
+		var qy = Math.abs( y ) - halfHeight;
+		var ox = Math.max( qx, 0 );
+		var oy = Math.max( qy, 0 );
+		return Math.sqrt( ox * ox + oy * oy ) + Math.min( Math.max( qx, qy ), 0 ) - radius;
+	}
+
+	function findRoundedBoxRayDistance( angle, safeHalfX, safeHalfY, radius ) {
+		var dx = Math.cos( angle );
+		var dy = Math.sin( angle );
+		var lo = 0;
+		var hi = safeHalfX + safeHalfY + radius + 1;
+		for ( var i = 0; i < 30; i++ ) {
+			var mid = ( lo + hi ) / 2;
+			var d = roundedBoxSdf( dx * mid, dy * mid, safeHalfX, safeHalfY, radius );
+			if ( d < 0 ) {
+				lo = mid;
+			} else {
+				hi = mid;
+			}
+		}
+		return ( lo + hi ) / 2;
+	}
+
+	// targetWidth/targetHeight(Pin/Markerの実表示矩形)とlabelSize.width/height
+	// (Label自身の実表示サイズ)から、Label中心の「Pin/Marker中心からのオフセット」を
+	// 求める。
+	function calculateLabelOffset( targetWidth, targetHeight, labelPosition, labelSize ) {
 		var angle = labelPosition * Math.PI * 2;
-		var nx = Math.cos( angle );
-		var ny = Math.sin( angle );
-		var targetRadius = Math.sqrt( Math.pow( targetWidth / 2, 2 ) + Math.pow( targetHeight / 2, 2 ) );
-		var labelRadius = Math.sqrt( Math.pow( labelSize.width / 2, 2 ) + Math.pow( labelSize.height / 2, 2 ) );
-		var distance = targetRadius + LABEL_GAP + labelRadius;
-		return { x: nx * distance, y: ny * distance };
+		var safeHalfX = targetWidth / 2 + labelSize.width / 2 + LABEL_GAP;
+		var safeHalfY = targetHeight / 2 + labelSize.height / 2 + LABEL_GAP;
+		var cornerRadius = clampToRange( labelSize.height * LABEL_SAFE_CORNER_RADIUS_RATIO, LABEL_SAFE_CORNER_RADIUS_MIN, LABEL_SAFE_CORNER_RADIUS_MAX );
+		var distance = findRoundedBoxRayDistance( angle, safeHalfX, safeHalfY, cornerRadius );
+		return { x: Math.cos( angle ) * distance, y: Math.sin( angle ) * distance };
 	}
 
 	// pinLocalRect: {centerX, centerY, width, height}。labelLocalSize: {width, height}。
@@ -63,7 +94,7 @@
 	// ローカル単位として扱える)。
 	function computeLabelCenter( labelPositionRaw, hasMarker, pinLocalRect, labelLocalSize ) {
 		var t = resolveLabelPosition( labelPositionRaw, hasMarker );
-		var offset = calculateCircleLabelOffset( pinLocalRect.width, pinLocalRect.height, t, labelLocalSize );
+		var offset = calculateLabelOffset( pinLocalRect.width, pinLocalRect.height, t, labelLocalSize );
 		return { x: pinLocalRect.centerX + offset.x, y: pinLocalRect.centerY + offset.y };
 	}
 
