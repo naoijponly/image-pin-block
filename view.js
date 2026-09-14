@@ -18,122 +18,22 @@
 	// editor.js / image-pin-block.php の同名比率と必ず一致させること。
 	var MARKER_MAX_WIDTH_RATIO = 0.5;
 
-	// Label位置(角丸矩形経路)関連の定数。editor.js の同名定数と必ず一致させること
-	// (Editor/Frontendで見た目がずれないようにするため)。
-	var LABEL_PATH_MARGIN = 6;
-	var LABEL_PATH_RADIUS = 10;
+	// Label位置(Pin/Markerを囲む円)関連の定数。editor.js の同名定数と必ず一致させること
+	// (Editor/Frontendで見た目がずれないようにするため)。260915: 角丸矩形の外周
+	// (弧長ベース)から円周(角度ベース)へ方式を変更した。詳細はeditor.js側の
+	// コメント参照。
 	var LABEL_GAP = 6;
+	var LABEL_POSITION_FALLBACK_ROUND = 0;
+	var LABEL_POSITION_FALLBACK_MARKER = 0.25;
 
-	function clampToRange( n, min, max ) {
-		return Math.min( max, Math.max( min, n ) );
-	}
-
-	// ─── Label位置(角丸矩形の外周)用の純粋なジオメトリ計算 ───
+	// ─── Label位置(Pin/Markerを囲む円周)用の純粋なジオメトリ計算 ───
 	// editor.js の同名関数と実装を同一に保つこと(コードの共有機構が無いため複製している。
 	// 詳細なコメントは editor.js 側を参照)。
-	function buildRoundedRectPath( rect, radius ) {
-		var w = Math.max( 0, rect.width );
-		var h = Math.max( 0, rect.height );
-		var r = Math.max( 0, Math.min( radius, w / 2, h / 2 ) );
-		var left = rect.left;
-		var top = rect.top;
-		var right = left + w;
-		var bottom = top + h;
-		var straightW = Math.max( 0, w - 2 * r );
-		var straightH = Math.max( 0, h - 2 * r );
-
-		function lineSegment( tag, x0, y0, x1, y1, nx, ny ) {
-			var len = Math.sqrt( ( x1 - x0 ) * ( x1 - x0 ) + ( y1 - y0 ) * ( y1 - y0 ) );
-			return {
-				tag: tag,
-				length: len,
-				pointAt: function( f ) {
-					return { x: x0 + ( x1 - x0 ) * f, y: y0 + ( y1 - y0 ) * f, nx: nx, ny: ny };
-				}
-			};
-		}
-
-		function arcSegment( cx, cy, startAngle, endAngle ) {
-			var sweep = endAngle - startAngle;
-			var len = Math.abs( sweep ) * r;
-			return {
-				tag: 'corner',
-				length: len,
-				pointAt: function( f ) {
-					var angle = startAngle + sweep * f;
-					var nx = Math.cos( angle );
-					var ny = Math.sin( angle );
-					return { x: cx + r * nx, y: cy + r * ny, nx: nx, ny: ny };
-				}
-			};
-		}
-
-		var segments = [];
-		if ( straightW > 0 ) {
-			segments.push( lineSegment( 'top', left + r, top, right - r, top, 0, -1 ) );
-		}
-		if ( r > 0 ) {
-			segments.push( arcSegment( right - r, top + r, -Math.PI / 2, 0 ) );
-		}
-		if ( straightH > 0 ) {
-			segments.push( lineSegment( 'right', right, top + r, right, bottom - r, 1, 0 ) );
-		}
-		if ( r > 0 ) {
-			segments.push( arcSegment( right - r, bottom - r, 0, Math.PI / 2 ) );
-		}
-		if ( straightW > 0 ) {
-			segments.push( lineSegment( 'bottom', right - r, bottom, left + r, bottom, 0, 1 ) );
-		}
-		if ( r > 0 ) {
-			segments.push( arcSegment( left + r, bottom - r, Math.PI / 2, Math.PI ) );
-		}
-		if ( straightH > 0 ) {
-			segments.push( lineSegment( 'left', left, bottom - r, left, top + r, -1, 0 ) );
-		}
-		if ( r > 0 ) {
-			segments.push( arcSegment( left + r, top + r, Math.PI, Math.PI * 1.5 ) );
-		}
-
-		var totalLength = segments.reduce( function( sum, seg ) { return sum + seg.length; }, 0 );
-		return { segments: segments, totalLength: totalLength };
-	}
-
-	function pathPointAtT( path, t ) {
-		if ( path.totalLength <= 0 || ! path.segments.length ) {
-			return { x: 0, y: 0, nx: 0, ny: -1 };
-		}
-		var tt = ( ( t % 1 ) + 1 ) % 1;
-		var s = tt * path.totalLength;
-		var offset = 0;
-		for ( var i = 0; i < path.segments.length; i++ ) {
-			var seg = path.segments[ i ];
-			var isLast = ( i === path.segments.length - 1 );
-			if ( s <= offset + seg.length || isLast ) {
-				var f = ( seg.length > 0 ) ? clampToRange( ( s - offset ) / seg.length, 0, 1 ) : 0;
-				return seg.pointAt( f );
-			}
-			offset += seg.length;
-		}
-		return path.segments[ 0 ].pointAt( 0 );
-	}
-
-	function findSegmentMidpointT( path, tag ) {
-		var offset = 0;
-		for ( var i = 0; i < path.segments.length; i++ ) {
-			var seg = path.segments[ i ];
-			if ( seg.tag === tag ) {
-				var s = offset + seg.length / 2;
-				return ( path.totalLength > 0 ) ? ( s / path.totalLength ) : 0;
-			}
-			offset += seg.length;
-		}
-		return null;
-	}
 
 	// labelPositionRaw: data-label-position属性からparseFloatした値(無ければNaN)。
 	// hasMarker: 画像マーカーかどうか(fallback方向の判定に使う。丸マーカーは右、
 	// 画像マーカーは下。editor.js の resolveLabelPosition と同じ考え方)。
-	function resolveLabelPosition( labelPositionRaw, hasMarker, path ) {
+	function resolveLabelPosition( labelPositionRaw, hasMarker ) {
 		if ( typeof labelPositionRaw === 'number' && isFinite( labelPositionRaw ) ) {
 			var t = labelPositionRaw % 1;
 			if ( t < 0 ) {
@@ -141,26 +41,26 @@
 			}
 			return t;
 		}
-		var fallback = findSegmentMidpointT( path, hasMarker ? 'bottom' : 'right' );
-		return ( fallback !== null ) ? fallback : 0;
+		return hasMarker ? LABEL_POSITION_FALLBACK_MARKER : LABEL_POSITION_FALLBACK_ROUND;
+	}
+
+	function calculateCircleLabelOffset( targetWidth, targetHeight, labelPosition, labelSize ) {
+		var angle = labelPosition * Math.PI * 2;
+		var nx = Math.cos( angle );
+		var ny = Math.sin( angle );
+		var baseRadius = Math.sqrt( Math.pow( targetWidth / 2, 2 ) + Math.pow( targetHeight / 2, 2 ) );
+		var support = Math.abs( nx ) * ( labelSize.width / 2 ) + Math.abs( ny ) * ( labelSize.height / 2 );
+		var distance = baseRadius + LABEL_GAP + support;
+		return { x: nx * distance, y: ny * distance };
 	}
 
 	// pinLocalRect: {centerX, centerY, width, height}。labelLocalSize: {width, height}。
 	// すべて実際の表示px(Zoom等の追加transformが無いフロント側では、実測値をそのまま
 	// ローカル単位として扱える)。
 	function computeLabelCenter( labelPositionRaw, hasMarker, pinLocalRect, labelLocalSize ) {
-		var pathRect = {
-			left: pinLocalRect.centerX - pinLocalRect.width / 2 - LABEL_PATH_MARGIN,
-			top: pinLocalRect.centerY - pinLocalRect.height / 2 - LABEL_PATH_MARGIN,
-			width: pinLocalRect.width + LABEL_PATH_MARGIN * 2,
-			height: pinLocalRect.height + LABEL_PATH_MARGIN * 2
-		};
-		var path = buildRoundedRectPath( pathRect, LABEL_PATH_RADIUS );
-		var t = resolveLabelPosition( labelPositionRaw, hasMarker, path );
-		var anchor = pathPointAtT( path, t );
-		var support = Math.abs( anchor.nx ) * ( labelLocalSize.width / 2 ) + Math.abs( anchor.ny ) * ( labelLocalSize.height / 2 );
-		var dist = support + LABEL_GAP;
-		return { x: anchor.x + anchor.nx * dist, y: anchor.y + anchor.ny * dist };
+		var t = resolveLabelPosition( labelPositionRaw, hasMarker );
+		var offset = calculateCircleLabelOffset( pinLocalRect.width, pinLocalRect.height, t, labelLocalSize );
+		return { x: pinLocalRect.centerX + offset.x, y: pinLocalRect.centerY + offset.y };
 	}
 
 	// targetEl(実際に描画されたPin/Marker本体、またはLabel自身)の実表示矩形を、

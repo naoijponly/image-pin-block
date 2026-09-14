@@ -86,18 +86,19 @@
 	var PAN_CLICK_THRESHOLD_PX = 5;
 	// 新規ピンを複製したとき、元のピンと重ならないようにずらす量(%)。
 	var DUPLICATE_OFFSET_PERCENT = 4;
-	// Label位置の経路(角丸矩形)関連。すべてローカル単位(Fit適用後・Zoom適用前のpx。
+	// Label位置(Pin/Markerを囲む円)関連。すべてローカル単位(Fit適用後・Zoom適用前のpx。
 	// Zoomはimage wrapper自体へのtransform: scale()で別途掛かるため、ここに含めない)。
-	// LABEL_PATH_MARGIN: Pin/Marker本体の外形から、経路(角丸矩形)を外側へ広げる量。
-	// 「本体の角を内側から削って角丸を作る」のではなく「本体より一回り大きい矩形を
-	// 角丸化する」ことで、経路がPin/Markerの四隅より必ず外側に来るようにする。
-	var LABEL_PATH_MARGIN = 6;
-	// LABEL_PATH_RADIUS: 経路の角の半径。矩形が小さい場合は幅・高さの半分でクランプする
-	// (buildRoundedRectPath側で行う)。
-	var LABEL_PATH_RADIUS = 10;
-	// LABEL_GAP: 経路(Pin/Markerの外形+LABEL_PATH_MARGIN)からLabel自身の縁までの
-	// 追加の余白。
+	// 260915: 角丸矩形の外周(弧長ベース)から、Pin/Markerを囲む円周(角度ベース)へ
+	// 方式を変更した。辺→角の遷移部分でLabelが外側へ「ぽこっ」と膨らんで見える
+	// (円周方式には存在しない不具合)問題を解消するため。labelPositionの保存形式・
+	// 意味(0以上1未満の一周する連続値)自体は変更していない。
+	// LABEL_GAP: 円周(Pin/Markerの外接円)からLabel自身の縁までの追加の余白。
 	var LABEL_GAP = 6;
+	// labelPositionが未設定の既存ピンのfallback位置(角度をlabelPositionと同じ
+	// 0〜1の値で表したもの。0=右、0.25=下、0.5=左、0.75=上)。丸マーカーは右、
+	// 画像マーカーは下、という角丸矩形方式のときと同じ見た目に合わせている。
+	var LABEL_POSITION_FALLBACK_ROUND = 0;
+	var LABEL_POSITION_FALLBACK_MARKER = 0.25;
 
 	// ラベル背景の不透明度(0〜100)。デフォルト100(=変更なし)。
 	var DEFAULT_BG_OPACITY = 100;
@@ -167,171 +168,21 @@
 		return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 	}
 
-	// ─── Label位置(角丸矩形の外周)用の純粋なジオメトリ計算 ───
-	// Pin/Markerの周囲を「辺」「角」で場合分けしない、連続した1本の経路として扱う
-	// (辺・角の状態切り替えは、境界付近でのジャンプ・震え・往復の原因になるため避ける)。
-	// editor.js・view.js の両方で同じロジックを使う(コードの共有機構が無いため、
-	// 内容を同一に保ったまま複製している。変更する場合は両方に同じ修正を適用すること)。
+	// ─── Label位置(Pin/Markerを囲む円周)用の純粋なジオメトリ計算 ───
+	// Pin/Markerの周囲を「辺」「角」で場合分けしない、360度連続した円周上の位置として
+	// 扱う(角丸矩形の弧長方式では、辺→角の遷移部分でLabelが外側へ「ぽこっ」と
+	// 膨らんで見えたため、円周方式へ変更した)。editor.js・view.js の両方で同じ
+	// ロジックを使う(コードの共有機構が無いため、内容を同一に保ったまま複製している。
+	// 変更する場合は両方に同じ修正を適用すること)。
 	//
-	// rect(left, top, width, height, radius)の外周を、4本の直線+4つの1/4円弧から成る、
-	// 順序付きの8セグメント(直線が0になる辺・半径0の場合は該当セグメントを含めない)
-	// として表現する。各セグメントは、長さ(px)・タグ('top'/'right'/'bottom'/'left'/
-	// 'corner')・ローカル位置(0〜1)から実座標+外向き法線を返す関数・任意の点から
-	// このセグメントへの最近傍点(距離込み)を返す関数を持つ。
-	function buildRoundedRectPath( rect, radius ) {
-		var w = Math.max( 0, rect.width );
-		var h = Math.max( 0, rect.height );
-		var r = Math.max( 0, Math.min( radius, w / 2, h / 2 ) );
-		var left = rect.left;
-		var top = rect.top;
-		var right = left + w;
-		var bottom = top + h;
-		var straightW = Math.max( 0, w - 2 * r );
-		var straightH = Math.max( 0, h - 2 * r );
+	// labelPosition(0以上1未満)をそのまま「円周上の角度」として解釈する
+	// (angle = labelPosition * 2π)。角度0を基準(右)とし、角度が増える向きは
+	// スクリーン座標系(y下向き)で時計回りになる(右→下→左→上→右)。
 
-		function lineSegment( tag, x0, y0, x1, y1, nx, ny ) {
-			var len = Math.sqrt( ( x1 - x0 ) * ( x1 - x0 ) + ( y1 - y0 ) * ( y1 - y0 ) );
-			return {
-				tag: tag,
-				length: len,
-				pointAt: function( f ) {
-					return { x: x0 + ( x1 - x0 ) * f, y: y0 + ( y1 - y0 ) * f, nx: nx, ny: ny };
-				},
-				nearest: function( px, py ) {
-					if ( len <= 0 ) {
-						return { f: 0, dist: Math.sqrt( ( px - x0 ) * ( px - x0 ) + ( py - y0 ) * ( py - y0 ) ) };
-					}
-					var t = ( ( px - x0 ) * ( x1 - x0 ) + ( py - y0 ) * ( y1 - y0 ) ) / ( len * len );
-					t = clampToRange( t, 0, 1 );
-					var qx = x0 + ( x1 - x0 ) * t;
-					var qy = y0 + ( y1 - y0 ) * t;
-					return { f: t, dist: Math.sqrt( ( px - qx ) * ( px - qx ) + ( py - qy ) * ( py - qy ) ) };
-				}
-			};
-		}
-
-		function arcSegment( cx, cy, startAngle, endAngle ) {
-			// startAngle→endAngleは常に増加方向(スクリーン座標系ではこれが時計回りになる)。
-			var sweep = endAngle - startAngle;
-			var len = Math.abs( sweep ) * r;
-			var seg = {
-				tag: 'corner',
-				length: len,
-				pointAt: function( f ) {
-					var angle = startAngle + sweep * f;
-					var nx = Math.cos( angle );
-					var ny = Math.sin( angle );
-					return { x: cx + r * nx, y: cy + r * ny, nx: nx, ny: ny };
-				},
-				nearest: function( px, py ) {
-					var angle = Math.atan2( py - cy, px - cx );
-					var twoPi = Math.PI * 2;
-					var sweepAbs = Math.abs( sweep );
-					var rel = ( ( angle - startAngle ) % twoPi + twoPi ) % twoPi;
-					var f;
-					if ( rel <= sweepAbs ) {
-						f = ( sweepAbs > 0 ) ? ( rel / sweepAbs ) : 0;
-					} else {
-						f = ( rel - sweepAbs <= twoPi - rel ) ? 1 : 0;
-					}
-					var p = seg.pointAt( f );
-					return { f: f, dist: Math.sqrt( ( px - p.x ) * ( px - p.x ) + ( py - p.y ) * ( py - p.y ) ) };
-				}
-			};
-			return seg;
-		}
-
-		var segments = [];
-		if ( straightW > 0 ) {
-			segments.push( lineSegment( 'top', left + r, top, right - r, top, 0, -1 ) );
-		}
-		if ( r > 0 ) {
-			segments.push( arcSegment( right - r, top + r, -Math.PI / 2, 0 ) );
-		}
-		if ( straightH > 0 ) {
-			segments.push( lineSegment( 'right', right, top + r, right, bottom - r, 1, 0 ) );
-		}
-		if ( r > 0 ) {
-			segments.push( arcSegment( right - r, bottom - r, 0, Math.PI / 2 ) );
-		}
-		if ( straightW > 0 ) {
-			segments.push( lineSegment( 'bottom', right - r, bottom, left + r, bottom, 0, 1 ) );
-		}
-		if ( r > 0 ) {
-			segments.push( arcSegment( left + r, bottom - r, Math.PI / 2, Math.PI ) );
-		}
-		if ( straightH > 0 ) {
-			segments.push( lineSegment( 'left', left, bottom - r, left, top + r, -1, 0 ) );
-		}
-		if ( r > 0 ) {
-			segments.push( arcSegment( left + r, top + r, Math.PI, Math.PI * 1.5 ) );
-		}
-
-		var totalLength = segments.reduce( function( sum, seg ) { return sum + seg.length; }, 0 );
-		return { segments: segments, totalLength: totalLength };
-	}
-
-	// 0以上1未満の連続値tから、経路上の実座標+外向き法線を求める。
-	function pathPointAtT( path, t ) {
-		if ( path.totalLength <= 0 || ! path.segments.length ) {
-			return { x: 0, y: 0, nx: 0, ny: -1 };
-		}
-		var tt = ( ( t % 1 ) + 1 ) % 1;
-		var s = tt * path.totalLength;
-		var offset = 0;
-		for ( var i = 0; i < path.segments.length; i++ ) {
-			var seg = path.segments[ i ];
-			var isLast = ( i === path.segments.length - 1 );
-			if ( s <= offset + seg.length || isLast ) {
-				var f = ( seg.length > 0 ) ? clampToRange( ( s - offset ) / seg.length, 0, 1 ) : 0;
-				return seg.pointAt( f );
-			}
-			offset += seg.length;
-		}
-		return path.segments[ 0 ].pointAt( 0 );
-	}
-
-	// 任意の点(px, py)に最も近い経路上の位置を、0以上1未満の連続値tとして返す。
-	// 「まずside/cornerを判定してから」ではなく、全セグメントへの最近傍点のうち
-	// 最も近いものを採用する(境界付近でのモード切り替えを発生させないため)。
-	function nearestTOnPath( path, px, py ) {
-		if ( path.totalLength <= 0 || ! path.segments.length ) {
-			return 0;
-		}
-		var bestDist = Infinity;
-		var bestS = 0;
-		var offset = 0;
-		for ( var i = 0; i < path.segments.length; i++ ) {
-			var seg = path.segments[ i ];
-			var res = seg.nearest( px, py );
-			if ( res.dist < bestDist ) {
-				bestDist = res.dist;
-				bestS = offset + res.f * seg.length;
-			}
-			offset += seg.length;
-		}
-		return ( path.totalLength > 0 ) ? ( bestS / path.totalLength ) : 0;
-	}
-
-	// 指定タグの最初のセグメントの中点にあたるtを返す(既存データにlabelPositionが
-	// 無い場合のfallback専用。丸マーカー→右、画像マーカー→下、という既存(旧v0.2.0)の
-	// 見た目に近い位置を再現する)。該当セグメントが無い(矩形が小さすぎる等)場合はnull。
-	function findSegmentMidpointT( path, tag ) {
-		var offset = 0;
-		for ( var i = 0; i < path.segments.length; i++ ) {
-			var seg = path.segments[ i ];
-			if ( seg.tag === tag ) {
-				var s = offset + seg.length / 2;
-				return ( path.totalLength > 0 ) ? ( s / path.totalLength ) : 0;
-			}
-			offset += seg.length;
-		}
-		return null;
-	}
-
-	// pinオブジェクトのlabelPositionを解決する(0以上1未満へ正規化。無効/未設定なら
-	// pin種類ごとのfallback位置を使う)。
-	function resolveLabelPosition( pin, path ) {
+	// pinオブジェクトのlabelPositionを0以上1未満へ正規化して返す。無効/未設定の
+	// 場合は、pinの種類(丸マーカー/画像マーカー)ごとのfallback位置を返す
+	// (角丸矩形方式のときと同じ見た目: 丸マーカーは右、画像マーカーは下)。
+	function resolveLabelPosition( pin ) {
 		if ( typeof pin.labelPosition === 'number' && isFinite( pin.labelPosition ) ) {
 			var t = pin.labelPosition % 1;
 			if ( t < 0 ) {
@@ -339,37 +190,38 @@
 			}
 			return t;
 		}
-		var fallbackTag = pin.markerImageUrl ? 'bottom' : 'right';
-		var fallback = findSegmentMidpointT( path, fallbackTag );
-		return ( fallback !== null ) ? fallback : 0;
+		return pin.markerImageUrl ? LABEL_POSITION_FALLBACK_MARKER : LABEL_POSITION_FALLBACK_ROUND;
+	}
+
+	// Pin/Markerの外接円上での、Label中心の「Pin/Marker中心からのオフセット」を求める。
+	//   1. targetWidth/targetHeight(Pin/Markerの実表示矩形)から外接円半径を求める
+	//      (矩形の四隅が必ず円内に収まる最小半径。正方形/円のPin/Markerでは
+	//      対角線の半分と一致する)。
+	//   2. labelPositionから求めた角度の単位方向ベクトル(nx, ny)を使い、Label自身の
+	//      幅・高さから、その方向へLabelの矩形がPin/Marker側へ食い込まないために
+	//      必要な支持距離(support distance)を求める:
+	//      abs(nx)*labelWidth/2 + abs(ny)*labelHeight/2
+	//      (円は楕円と異なり全方位で半径が同じため、この支持距離の計算だけで
+	//      斜め方向を含めた非重なりが保証される)。
+	//   3. 外接円半径+LABEL_GAP+支持距離だけ、その方向へ進めた点をLabelの中心とする。
+	function calculateCircleLabelOffset( targetWidth, targetHeight, labelPosition, labelSize ) {
+		var angle = labelPosition * Math.PI * 2;
+		var nx = Math.cos( angle );
+		var ny = Math.sin( angle );
+		var baseRadius = Math.sqrt( Math.pow( targetWidth / 2, 2 ) + Math.pow( targetHeight / 2, 2 ) );
+		var support = Math.abs( nx ) * ( labelSize.width / 2 ) + Math.abs( ny ) * ( labelSize.height / 2 );
+		var distance = baseRadius + LABEL_GAP + support;
+		return { x: nx * distance, y: ny * distance, nx: nx, ny: ny };
 	}
 
 	// Pin/Markerのローカル矩形(pinLocalRect: centerX, centerY, width, height)と、
 	// Label自身のローカルサイズ(labelLocalSize: width, height)から、Labelの
-	// 中心座標(ローカル単位)を求める。
-	//   1. pinLocalRectをLABEL_PATH_MARGIN分だけ外側へ広げ、LABEL_PATH_RADIUSで角丸化した
-	//      経路(角丸矩形)を作る(本体の角を内側から削るのではなく、外側へ拡張した矩形を
-	//      角丸化することで、経路が常にPin/Markerの外側に来るようにする)。
-	//   2. labelPosition(0〜1)から、経路上のアンカー点+外向き法線を求める。
-	//   3. Label自身の幅・高さと法線方向から、Labelの矩形がPin/Marker側へ食い込まない
-	//      よう必要な支持距離(support distance)を求める:
-	//      abs(nx)*labelWidth/2 + abs(ny)*labelHeight/2
-	//      (法線が斜め方向の角丸部分では、水平・垂直の両方の必要量が滑らかに混ざる)。
-	//   4. アンカー点から、法線方向へ(支持距離+LABEL_GAP)だけ進めた点をLabelの中心とする。
-	// pin: labelPosition解決のfallback判定(markerImageUrlの有無)に使う。
+	// 中心座標(ローカル単位)を求める。pin: labelPosition解決のfallback判定
+	// (markerImageUrlの有無)に使う。
 	function computeLabelCenter( pin, pinLocalRect, labelLocalSize ) {
-		var pathRect = {
-			left: pinLocalRect.centerX - pinLocalRect.width / 2 - LABEL_PATH_MARGIN,
-			top: pinLocalRect.centerY - pinLocalRect.height / 2 - LABEL_PATH_MARGIN,
-			width: pinLocalRect.width + LABEL_PATH_MARGIN * 2,
-			height: pinLocalRect.height + LABEL_PATH_MARGIN * 2
-		};
-		var path = buildRoundedRectPath( pathRect, LABEL_PATH_RADIUS );
-		var t = resolveLabelPosition( pin, path );
-		var anchor = pathPointAtT( path, t );
-		var support = Math.abs( anchor.nx ) * ( labelLocalSize.width / 2 ) + Math.abs( anchor.ny ) * ( labelLocalSize.height / 2 );
-		var dist = support + LABEL_GAP;
-		return { x: anchor.x + anchor.nx * dist, y: anchor.y + anchor.ny * dist, path: path, t: t };
+		var t = resolveLabelPosition( pin );
+		var offset = calculateCircleLabelOffset( pinLocalRect.width, pinLocalRect.height, t, labelLocalSize );
+		return { x: pinLocalRect.centerX + offset.x, y: pinLocalRect.centerY + offset.y, t: t };
 	}
 
 	// DOM要素(el)の実際の表示矩形(getBoundingClientRect())を、wrapperEl基準の
@@ -510,8 +362,8 @@
 	}
 
 	// ラベルのインラインstyle(背景色+不透明度・文字色・文字サイズ・縁取り)。
-	// buildPinContent(ブロック自身のキャンバス)と、モーダル内の独立配置Label(下記
-	// 「Label位置」関連の描画)の両方から使う共通処理。
+	// ブロック自身のキャンバス・モーダルの両方で、独立配置されたLabel要素(下記
+	// 「Label位置」関連の描画)に使う共通処理。
 	function buildLabelStyle( display ) {
 		var ratio = display.widthRatio || 1;
 		return Object.assign(
@@ -524,132 +376,18 @@
 		);
 	}
 
-	// ピン内部の見た目(丸マーカー+ラベル横並び／画像マーカー+ラベル下表示)を組み立てる。
-	// 編集画面用。フロント側の見た目は image-pin-block.php 側で同じ構造を出力する。
-	// display: { pinSize, pinColor, labelBackgroundColor, labelTextColor, labelFontSize, widthRatio,
-	//            mainImageWidth, markerNaturalWidths, onMarkerImageLoad, registerMarkerImageRef,
-	//            onMarkerResizePointerDown }
+	// Pin/Markerの実際の外形(丸マーカーのドット、または画像マーカー+選択中なら
+	// リサイズハンドル)だけを組み立てる(ラベルを含まない)。編集画面用(ブロック自身の
+	// 表示専用キャンバス・モーダルの両方で共通に使う)。フロント側の見た目は
+	// image-pin-block.php 側で同じ構造を出力する。
+	// display: { pinSize, pinColor, mainImageWidth, markerNaturalWidths, onMarkerImageLoad,
+	//            registerMarkerImageRef, onMarkerResizePointerDown, widthRatio }
 	// (ブロック単位の見た目設定)。registerMarkerImageRef/onMarkerResizePointerDownは、
 	// モーダル内の画像編集エリアでのドラッグ移動・リサイズに使うためのもの(不要な
-	// 呼び出し側では省略可)。isSelected: 画像マーカーのリサイズハンドルを表示するかどうか。
-	// ピンのサイズ・色は丸マーカーのみに適用し、ラベルの背景色・文字色は丸マーカー・画像マーカー共通。
-	// このキャンバス用の描画(ブロック自身の表示専用キャンバスでのみ使用)は、Label位置
-	// ドラッグ機能の追加対象外(モーダル専用機能)のため、従来どおりflexでマーカー/ドット
-	// に隣接させたまま変更していない(モーダル側は buildPinVisualOnly + 独立配置Labelを使う)。
-	function buildPinContent( pin, display, isSelected ) {
-		var ratio = display.widthRatio || 1;
-		var hasLabelText = !! ( pin.label && '' !== pin.label );
-		var labelStyle = buildLabelStyle( display );
-
-		if ( pin.markerImageUrl ) {
-			var scale = resolveMarkerScale( pin );
-			var showLabel = pin.showLabel !== false;
-
-			// マーカー画像の実寸(naturalWidth)が判明していれば、本体画像に対する上限割合
-			// (MARKER_MAX_WIDTH_RATIO)でクランプした実寸px幅を指定する。transform: scale() だけに
-			// 頼ると、レイアウト上のサイズ(=ボタン要素の当たり判定)が原寸のまま残ってしまい、
-			// マーカー画像が本体画像と同等以上の解像度の場合にポインタイベントを奪ってしまうため
-			// (ドラッグ・他のピンの操作が破綻する不具合の原因だった)。
-			// 読み込み前(naturalWidth 未取得)の一瞬だけは、旧来の transform: scale() で暫定表示する。
-			var naturalW = ( display.markerNaturalWidths && display.markerNaturalWidths[ pin.id ] ) || 0;
-			var markerStyle;
-			var displayWidthPx = 0;
-			if ( naturalW > 0 ) {
-				var idealWidth = naturalW * ( scale / 100 );
-				var maxBaseWidth = ( display.mainImageWidth || 0 ) * MARKER_MAX_WIDTH_RATIO;
-				var baseWidth = ( maxBaseWidth > 0 ) ? Math.min( idealWidth, maxBaseWidth ) : idealWidth;
-				displayWidthPx = baseWidth * ratio;
-				markerStyle = { width: displayWidthPx + 'px', height: 'auto' };
-			} else {
-				markerStyle = { transform: 'scale(' + ( ( scale / 100 ) * ratio ) + ')' };
-			}
-
-			var markerImageEl = el( 'img', {
-				key: 'marker-image',
-				className: 'image-pin-block-editor__pin-marker-image',
-				src: pin.markerImageUrl,
-				alt: '',
-				style: markerStyle,
-				ref: function( node ) {
-					if ( display.registerMarkerImageRef ) {
-						display.registerMarkerImageRef( pin.id, node );
-					}
-				},
-				onLoad: function( evt ) {
-					if ( display.onMarkerImageLoad ) {
-						display.onMarkerImageLoad( pin.id, evt.target.naturalWidth || 0 );
-					}
-				}
-			} );
-
-			// リサイズハンドルは「選択中のマーカー画像ピン」にのみ表示する(操作対象を
-			// 一意にするため)。naturalW未取得(画像読み込み前)の一瞬は、幅計測ができないため
-			// 表示しない。
-			var handleEl = null;
-			if ( isSelected && naturalW > 0 ) {
-				var handleSize = clampToRange( displayWidthPx * MARKER_RESIZE_HANDLE_RATIO, MARKER_RESIZE_HANDLE_MIN_PX, MARKER_RESIZE_HANDLE_MAX_PX );
-				handleEl = el( 'span', {
-					key: 'marker-resize-handle',
-					className: 'image-pin-block-editor__marker-resize-handle',
-					style: { width: handleSize + 'px', height: handleSize + 'px' },
-					title: __( 'Drag to resize', 'image-pin-block' ),
-					onPointerDown: function( evt ) {
-						evt.stopPropagation();
-						if ( display.onMarkerResizePointerDown ) {
-							display.onMarkerResizePointerDown( pin.id, evt );
-						}
-					},
-					onClick: function( evt ) { evt.stopPropagation(); }
-				} );
-			}
-
-			var children = [
-				el(
-					'span',
-					{ key: 'marker-wrap', className: 'image-pin-block-editor__marker-wrap' },
-					markerImageEl,
-					handleEl
-				)
-			];
-			// ラベル未入力のときは代替文字を画面に出さず、画像だけを表示する
-			// (丸マーカーと異なり「ピン」を補わない)。
-			if ( showLabel && hasLabelText ) {
-				children.push(
-					el(
-						'span',
-						{ key: 'marker-label', className: 'image-pin-block-editor__pin-label', style: labelStyle },
-						pin.label
-					)
-				);
-			}
-			return children;
-		}
-
-		var dotStyle = {
-			width: ( display.pinSize * ratio ) + 'px',
-			height: ( display.pinSize * ratio ) + 'px',
-			backgroundColor: display.pinColor
-		};
-		var dotChildren = [
-			el( 'span', { key: 'dot', className: 'image-pin-block-editor__pin-dot', style: dotStyle, 'aria-hidden': 'true' } )
-		];
-		// ラベル未入力のときは代替文字を画面に出さず、ドットだけを表示する
-		// (画像マーカーと同じ扱いに揃えている。詳細は上のコメント参照)。
-		if ( hasLabelText ) {
-			dotChildren.push(
-				el( 'span', { key: 'label', className: 'image-pin-block-editor__pin-label', style: labelStyle }, pin.label )
-			);
-		}
-		return dotChildren;
-	}
-
-	// buildPinContent() の丸マーカー/画像マーカー描画部分だけを取り出したもの(ラベルを
-	// 含まない)。モーダル内のLabelドラッグ配置(下記「Label位置」参照)専用。
-	// Labelを独立した要素として別途配置するため、Pinコンテナ自体はマーカー/ドットの
-	// 実際の外形(+選択中の画像マーカーのリサイズハンドル)だけを含む。ブロック自身の
-	// キャンバス(表示専用)は既存のbuildPinContent()を変更せずそのまま使う(Labelは
-	// 従来どおりflexで隣接表示。この関数はモーダル専用の新規追加であり、キャンバス側の
-	// 見た目・挙動には一切影響しない)。
+	// 呼び出し側では省略可)。isSelected: 画像マーカーのリサイズハンドルを表示するか
+	// どうか(表示専用キャンバス側では常にfalseを渡す)。ピンのサイズ・色は丸マーカーの
+	// みに適用する。Labelは独立した要素として別途配置する(下記「Label位置」参照。
+	// buildLabelStyle()で見た目を組み立て、computeLabelCenter()で位置を計算する)。
 	function buildPinVisualOnly( pin, display, isSelected ) {
 		var ratio = display.widthRatio || 1;
 
@@ -945,7 +683,7 @@
 		var s = props.popoverSettings;
 		// ratio: Preview viewportへのFit倍率(modalFitRatio)。呼び出し元の image wrapper
 		// 自体がZoom(transform: scale())の対象であり、このプレビューはその内側に描画される
-		// ため、ここでZoom倍率まで掛けると二重に拡大されてしまう(buildPinContentの
+		// ため、ここでZoom倍率まで掛けると二重に拡大されてしまう(buildLabelStyleの
 		// labelFontSizeと同じ考え方)。
 		var hasLabelText = !! ( pin.label && '' !== pin.label );
 		var hasDescriptionText = !! ( pin.description && '' !== pin.description );
@@ -1166,6 +904,8 @@
 	}
 
 	// 生成したBlobをファイルとして保存させる(Blob URL + 一時的な<a download>要素)。
+	// showSaveFilePicker() が使えない環境でのfallback、および対応環境でユーザーが
+	// キャンセルしなかった場合の実際の書き込み経路以外(=フォールバック専用)として使う。
 	function triggerPngDownload( blob, fileName ) {
 		var url = window.URL.createObjectURL( blob );
 		var a = document.createElement( 'a' );
@@ -1175,6 +915,59 @@
 		a.click();
 		document.body.removeChild( a );
 		window.setTimeout( function() { window.URL.revokeObjectURL( url ); }, 1000 );
+	}
+
+	// 元画像のURLからPNG保存用のファイル名を組み立てる(例: .../photo.jpg → photo-pins.png)。
+	// URLの形式が想定外で取得できない場合は分かりやすい既定値にフォールバックする。
+	function buildExportFileName( imageUrl ) {
+		var fallback = 'image-pin-block.png';
+		if ( ! imageUrl ) {
+			return fallback;
+		}
+		try {
+			var withoutQuery = imageUrl.split( '?' )[ 0 ].split( '#' )[ 0 ];
+			var segments = withoutQuery.split( '/' );
+			var last = segments[ segments.length - 1 ] || '';
+			var dot = last.lastIndexOf( '.' );
+			var base = ( dot > 0 ) ? last.substring( 0, dot ) : last;
+			base = base.replace( /[^A-Za-z0-9_-]+/g, '-' ).replace( /^-+|-+$/g, '' );
+			return base ? ( base + '-pins.png' ) : fallback;
+		} catch ( err ) {
+			return fallback;
+		}
+	}
+
+	// PNG Blobを保存する。window.showSaveFilePicker() が使える環境では、OS標準の
+	// 「名前を付けて保存」ダイアログを表示し、ユーザーが保存先フォルダ・ファイル名を
+	// 選べるようにする。非対応環境では、従来どおりBlob URL + <a download>要素で
+	// (ブラウザ既定のダウンロード先へ)保存する。戻り値はPromiseで、ユーザーが
+	// Save File Pickerをキャンセルした場合(AbortError)は、エラーとして扱わずに
+	// 解決する(呼び出し側でエラー表示させないため)。実際の書き込み失敗(write/close)
+	// はエラーとして reject する。
+	function savePngBlob( blob, fileName ) {
+		if ( typeof window.showSaveFilePicker !== 'function' ) {
+			triggerPngDownload( blob, fileName );
+			return Promise.resolve();
+		}
+		return window.showSaveFilePicker( {
+			suggestedName: fileName,
+			types: [ {
+				description: 'PNG image',
+				accept: { 'image/png': [ '.png' ] }
+			} ]
+		} ).then( function( handle ) {
+			return handle.createWritable().then( function( writable ) {
+				return writable.write( blob ).then( function() {
+					return writable.close();
+				} );
+			} );
+		} ).catch( function( err ) {
+			// ユーザーによるキャンセル(AbortError)は正常終了として扱う(エラーにしない)。
+			if ( err && 'AbortError' === err.name ) {
+				return;
+			}
+			throw err;
+		} );
 	}
 
 	function Edit( props ) {
@@ -1338,6 +1131,65 @@
 
 		displaySettings.widthRatio = widthRatio;
 
+		// 静的キャンバス(表示専用。モーダルを閉じた通常のGutenbergブロック表示)専用の
+		// Label位置。モーダルと同じcomputeLabelCenter()(Pin/Markerを囲む円周上の位置)を
+		// 使うが、キャンバス自体にはZoom用のtransformが無いため、実測値をそのまま
+		// ローカル単位として使える(zoomScale=1固定)。ドラッグ操作は持たない(表示のみ。
+		// 編集はFullscreen Editor側でのみ行う)。
+		var staticPinAnchorRefsRef = useRef( {} );
+		function registerStaticPinAnchorRef( pinId, node ) {
+			if ( node ) {
+				staticPinAnchorRefsRef.current[ pinId ] = node;
+			} else {
+				delete staticPinAnchorRefsRef.current[ pinId ];
+			}
+		}
+		var staticLabelRefsRef = useRef( {} );
+		function registerStaticLabelRef( pinId, node ) {
+			if ( node ) {
+				staticLabelRefsRef.current[ pinId ] = node;
+			} else {
+				delete staticLabelRefsRef.current[ pinId ];
+			}
+		}
+
+		var staticLabelRenderPositionsState = useState( {} );
+		var staticLabelRenderPositions = staticLabelRenderPositionsState[ 0 ];
+		var setStaticLabelRenderPositions = staticLabelRenderPositionsState[ 1 ];
+
+		useLayoutEffect( function() {
+			var wrapperEl = wrapperRef.current;
+			if ( ! wrapperEl ) {
+				return;
+			}
+			var next = {};
+			var changed = false;
+			pins.forEach( function( pin ) {
+				var anchorEl = staticPinAnchorRefsRef.current[ pin.id ];
+				var labelEl = staticLabelRefsRef.current[ pin.id ];
+				if ( ! anchorEl || ! labelEl ) {
+					return;
+				}
+				var pinRect = measureLocalRectRelativeTo( anchorEl, wrapperEl, 1 );
+				var labelRect = measureLocalRectRelativeTo( labelEl, wrapperEl, 1 );
+				if ( ! pinRect || ! labelRect ) {
+					return;
+				}
+				var center = computeLabelCenter( pin, pinRect, { width: labelRect.width, height: labelRect.height } );
+				next[ pin.id ] = { x: center.x, y: center.y };
+				var prev = staticLabelRenderPositions[ pin.id ];
+				if ( ! prev || Math.abs( prev.x - center.x ) > 0.5 || Math.abs( prev.y - center.y ) > 0.5 ) {
+					changed = true;
+				}
+			} );
+			if ( ! changed && Object.keys( next ).length !== Object.keys( staticLabelRenderPositions ).length ) {
+				changed = true;
+			}
+			if ( changed ) {
+				setStaticLabelRenderPositions( next );
+			}
+		} );
+
 		// modalPreviewHostRef: Preview viewport(16:9)を最大containする、利用可能な
 		// 領域(ズーム行・ピン一覧・個別設定を除いた残り)。modalWrapperRef: 実際に
 		// 画像・ピンを描画する要素(Image wrapper)。Fit状態の実寸px(width/height)を
@@ -1468,7 +1320,14 @@
 							window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
 							return;
 						}
-						triggerPngDownload( resultBlob, 'image-pin-block.png' );
+						var fileName = buildExportFileName( attributes.imageUrl );
+						// savePngBlob()は、対応環境ではユーザー操作(このクリック)から直接
+						// window.showSaveFilePicker()を呼ぶ(setTimeout等を挟んでuser
+						// activationを失わないようにするため)。ユーザーがダイアログを
+						// キャンセルした場合はエラーとして扱わない(savePngBlob内部で吸収済み)。
+						savePngBlob( resultBlob, fileName ).catch( function() {
+							window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
+						} );
 					} );
 				} catch ( err ) {
 					window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
@@ -1487,8 +1346,8 @@
 		}, [ modalZoom, modalPreviewSize.width, modalPreviewSize.height ] );
 
 		// マーカー画像の実寸(naturalWidth、px)をピンIDごとにキャッシュする。
-		// <img> の読み込み完了(onLoad)時に記録し、buildPinContent() が上限クランプの計算に使う
-		// (MARKER_MAX_WIDTH_RATIO 参照)。
+		// <img> の読み込み完了(onLoad)時に記録し、buildPinVisualOnly() が上限クランプの
+		// 計算に使う(MARKER_MAX_WIDTH_RATIO 参照)。
 		var markerNaturalWidthsState = useState( {} );
 		var markerNaturalWidths = markerNaturalWidthsState[ 0 ];
 		var setMarkerNaturalWidths = markerNaturalWidthsState[ 1 ];
@@ -1514,7 +1373,7 @@
 		// ラベルの有無による見た目上の位置ずれを、数式で再現せず実測することで正確に扱う)。
 		// v0.2.0でモーダル化してからは、モーダル内の画像編集エリアの描画にのみ使う
 		// (表示専用のキャンバス側では登録しない。displaySettingsではなくmodalDisplaySettings
-		// 経由でbuildPinContentに渡す)。
+		// 経由でbuildPinVisualOnlyに渡す)。
 		var markerImageRefsRef = useRef( {} );
 		function registerMarkerImageRef( pinId, node ) {
 			if ( node ) {
@@ -1598,9 +1457,9 @@
 			}
 		} );
 
-		// Labelを直接ドラッグして、角丸矩形経路(Pin/Markerの周囲)上の任意の位置へ配置する。
-		// 経路・Label自身のサイズは、ドラッグ開始時点で一度だけ実測する(位置移動そのものでは
-		// Pin/Markerやテキストの大きさは変わらないため。marker resize等と同様、ドラッグ中は
+		// Labelを直接ドラッグして、Pin/Markerを囲む円周上の任意の位置へ配置する。
+		// Pin/Marker中心は、ドラッグ開始時点で一度だけ実測する(位置移動そのものでは
+		// Pin/Markerの大きさは変わらないため)。marker resize等と同様、ドラッグ中は
 		// pins配列を直接更新し、pointerup時にまとめて確定するのではなく毎回commitする
 		// 方式に揃える。理由はhandleModalPinPointerDown/handleMarkerResizePointerDownの
 		// コメント参照)。
@@ -1623,35 +1482,37 @@
 				return;
 			}
 			var pinRect = measureLocalRectRelativeTo( anchorEl, wrapperEl, zoomScale );
-			var labelRect = measureLocalRectRelativeTo( labelEl, wrapperEl, zoomScale );
-			if ( ! pinRect || ! labelRect ) {
+			if ( ! pinRect ) {
 				return;
 			}
-			var pathRect = {
-				left: pinRect.centerX - pinRect.width / 2 - LABEL_PATH_MARGIN,
-				top: pinRect.centerY - pinRect.height / 2 - LABEL_PATH_MARGIN,
-				width: pinRect.width + LABEL_PATH_MARGIN * 2,
-				height: pinRect.height + LABEL_PATH_MARGIN * 2
-			};
-			var path = buildRoundedRectPath( pathRect, LABEL_PATH_RADIUS );
+			var centerX = pinRect.centerX;
+			var centerY = pinRect.centerY;
 
 			var pointerId = evt.pointerId;
 			if ( labelEl.setPointerCapture ) {
 				labelEl.setPointerCapture( pointerId );
 			}
 
+			// Pointer位置とPin/Marker中心からatan2で角度を求め、0以上1未満へ正規化する
+			// だけの単純な計算(side/corner判定・最近傍点探索は不要)。atan2は
+			// -π〜+πの境界(ちょうど中心の左側)を跨ぐと戻り値が不連続に変わるが、
+			// 最終的な表示位置はcos/sin(周期関数)経由で決まるため、この境界を
+			// 跨いでも見た目上のLabel位置がジャンプすることはない。
 			function handleMove( moveEvt ) {
 				if ( moveEvt.pointerId !== pointerId ) {
 					return;
 				}
 				moveEvt.stopPropagation();
-				var wRect = wrapperEl.getBoundingClientRect();
 				if ( zoomScale <= 0 ) {
 					return;
 				}
+				var wRect = wrapperEl.getBoundingClientRect();
 				var localX = ( moveEvt.clientX - wRect.left ) / zoomScale;
 				var localY = ( moveEvt.clientY - wRect.top ) / zoomScale;
-				var t = nearestTOnPath( path, localX, localY );
+				var dx = localX - centerX;
+				var dy = localY - centerY;
+				var t = Math.atan2( dy, dx ) / ( Math.PI * 2 );
+				t = ( ( t % 1 ) + 1 ) % 1;
 				updatePins(
 					pins.map( function( p ) {
 						if ( p.id !== pinId ) {
@@ -1936,7 +1797,8 @@
 			}
 
 			// マーカー画像を持つピンは、その外形が本体画像の内側に収まるよう移動範囲を
-			// 制限する(丸マーカーは対象外。理由は buildPinContent 呼び出し側のコメント参照)。
+			// 制限する(丸マーカーは対象外。詳細は docs/DATA_LAYOUT.md の
+			// 「マーカー画像の移動範囲の制限」参照)。
 			// flexboxの中央寄せ・ラベルの有無による見た目上のオフセットを数式で再現する代わりに、
 			// ドラッグ開始時点で実際に描画されたマーカー画像の位置を getBoundingClientRect() で
 			// 測定し、アンカー点(x%,y%が指す位置)からの相対オフセットとして保持する。
@@ -2380,16 +2242,47 @@
 		// ブロック自身のキャンバスは v0.2.0 より表示専用(ドラッグ・クリックでの選択・追加は
 		// すべてモーダル内に集約した)。プレビュー中の色は反映せず、確定済みの値のみを使う
 		// (ドラッグ中のライブプレビューはモーダルを開いている間しか意味を持たないため)。
+		// Pin/Markerのコンテナ自体はマーカー/ドットのみ(buildPinVisualOnly。isSelected=false
+		// 固定でリサイズハンドルは出さない)。Labelはモーダルと同じ考え方(円周上の
+		// labelPosition)で独立配置するが、ここでは表示のみでドラッグ操作は持たない。
 		var pinElements = pins.map( function( pin ) {
 			return el(
 				'div',
 				{
 					key: pin.id,
+					ref: function( node ) { registerStaticPinAnchorRef( pin.id, node ); },
 					className: 'image-pin-block-editor__pin'
 						+ ( pin.markerImageUrl ? ' has-marker-image' : '' ),
 					style: { left: clampPercent( pin.x ) + '%', top: clampPercent( pin.y ) + '%' }
 				},
-				buildPinContent( pin, displaySettings )
+				buildPinVisualOnly( pin, displaySettings, false )
+			);
+		} );
+
+		var staticLabelElements = [];
+		pins.forEach( function( pin ) {
+			var hasLabelText = !! ( pin.label && '' !== pin.label );
+			var showLabel = pin.markerImageUrl ? ( pin.showLabel !== false ) : true;
+			if ( ! hasLabelText || ! showLabel ) {
+				return;
+			}
+			var pos = staticLabelRenderPositions[ pin.id ] || { x: 0, y: 0 };
+			var style = Object.assign(
+				{
+					position: 'absolute',
+					left: pos.x + 'px',
+					top: pos.y + 'px',
+					transform: 'translate(-50%, -50%)'
+				},
+				buildLabelStyle( displaySettings )
+			);
+			staticLabelElements.push(
+				el( 'span', {
+					key: 'static-label-' + pin.id,
+					className: 'image-pin-block-editor__pin-label',
+					style: style,
+					ref: function( node ) { registerStaticLabelRef( pin.id, node ); }
+				}, pin.label )
 			);
 		} );
 
@@ -2860,7 +2753,8 @@
 					src: attributes.imageUrl,
 					alt: ''
 				} ),
-				pinElements
+				pinElements,
+				staticLabelElements
 			)
 		);
 	}
