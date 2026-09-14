@@ -192,11 +192,6 @@
 	pointer-events: none;
 }
 
-.image-pin-block-editor__canvas-popover-label {
-	font-weight: bold;
-	margin-bottom: 4px;
-}
-
 /* Color Pickerの「適用」「閉じる」ボタン行。 */
 .image-pin-block-editor__color-picker-actions {
 	display: flex;

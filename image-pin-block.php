@@ -420,39 +420,25 @@ function image_pin_block_render_callback( $attributes, $content ) {
 				if ( empty( $pin['id'] ) ) {
 					continue;
 				}
-				$pin_id      = sanitize_html_class( $pin['id'] );
-				$raw_label   = isset( $pin['label'] ) ? (string) $pin['label'] : '';
 				$description = isset( $pin['description'] ) ? (string) $pin['description'] : '';
-				// マーカー画像を持つピンは、丸マーカー用の $show_marker_label(上記ループ参照)と
-				// 同じ条件でのみラベルを表示する。「ラベルを表示する」を外している、または
-				// ラベル未入力の場合は、代替文字("Pin")も含めて一切表示しない
-				// (画像の下のラベルだけ非表示で、ポップオーバー内には出る、という不整合を防ぐ)。
-				// 丸マーカーは showLabel を持たないため、ラベルが空でなければ常に表示する
-				// (未入力時は代替文字を補わず、画像上の可視ラベルと同じ扱いにする)。
-				$has_marker_for_desc = isset( $pin['markerImageUrl'] ) && '' !== (string) $pin['markerImageUrl'];
-				$show_desc_label = $has_marker_for_desc
-					? ( ( ! isset( $pin['showLabel'] ) || (bool) $pin['showLabel'] ) && '' !== $raw_label )
-					: ( '' !== $raw_label );
-				// ラベル・説明文がどちらも空のピンは、ポップオーバーに表示するものが無いため
-				// <template> 自体を出力しない。view.js の cloneTemplateContent() は該当する
+				// PopoverはDescriptionのみを表示する(画像上のLabelと重複させないため)。
+				// Descriptionが空のピンは、Popoverに表示するものが無いため <template>
+				// 自体を出力しない。view.js の cloneTemplateContent() は該当する
 				// <template> が無ければ null を返し、呼び出し側(openPopoverForPin 等)は
 				// 何もしないガードを既に持っているため、JS側の変更は不要。
+				if ( '' === $description ) {
+					continue;
+				}
+				$pin_id      = sanitize_html_class( $pin['id'] );
 				$target      = isset( $pin['target'] ) ? sanitize_html_class( $pin['target'] ) : '';
+				// desc-body直下にPHPタグ・改行由来の余計なwhitespace text nodeを作らないよう、
+				// 表示内容を先に1つの文字列として組み立ててから、タグの直後へ隙間なく出力する
+				// (white-space: pre-wrapがこの余計な改行まで画面上の空行として表示してしまうため)。
+				$desc_html = ( $pc_needs_link && '' !== $target )
+					? '<a class="image-pin-block__desc-link" href="#' . esc_attr( $target ) . '">' . esc_html( $description ) . '</a>'
+					: esc_html( $description );
 				?>
-				<?php if ( '' !== $raw_label || '' !== $description ) : ?>
-				<template class="image-pin-block__tpl-pc" data-pin-id="<?php echo esc_attr( $pin_id ); ?>">
-					<?php if ( $show_desc_label ) : ?>
-						<div class="image-pin-block__desc-label"><?php echo esc_html( $raw_label ); ?></div>
-					<?php endif; ?>
-					<div class="image-pin-block__desc-body">
-						<?php if ( $pc_needs_link && '' !== $target ) : ?>
-							<a class="image-pin-block__desc-link" href="#<?php echo esc_attr( $target ); ?>"><?php echo esc_html( $description ); ?></a>
-						<?php else : ?>
-							<?php echo esc_html( $description ); ?>
-						<?php endif; ?>
-					</div>
-				</template>
-				<?php endif; ?>
+				<template class="image-pin-block__tpl-pc" data-pin-id="<?php echo esc_attr( $pin_id ); ?>"><div class="image-pin-block__desc-body"><?php echo $desc_html; ?></div></template>
 			<?php endforeach; ?>
 		</div>
 
@@ -464,31 +450,19 @@ function image_pin_block_render_callback( $attributes, $content ) {
 			if ( empty( $pin['id'] ) ) {
 				continue;
 			}
-			$pin_id      = sanitize_html_class( $pin['id'] );
-			$raw_label   = isset( $pin['label'] ) ? (string) $pin['label'] : '';
 			$description = isset( $pin['description'] ) ? (string) $pin['description'] : '';
-			// PC用テンプレートと同じ理由で、マーカー画像ピンの showLabel/未入力、丸マーカーの
-			// 未入力時の扱いを反映する。
-			$has_marker_for_desc = isset( $pin['markerImageUrl'] ) && '' !== (string) $pin['markerImageUrl'];
-			$show_desc_label = $has_marker_for_desc
-				? ( ( ! isset( $pin['showLabel'] ) || (bool) $pin['showLabel'] ) && '' !== $raw_label )
-				: ( '' !== $raw_label );
+			// Mobile説明パネルもDescriptionのみを表示する(画像上のLabelと重複させないため。
+			// PC用テンプレートと同じ理由)。
+			if ( '' === $description ) {
+				continue;
+			}
+			$pin_id      = sanitize_html_class( $pin['id'] );
 			$target      = isset( $pin['target'] ) ? sanitize_html_class( $pin['target'] ) : '';
+			$desc_html = ( $mobile_needs_link && '' !== $target )
+				? '<a class="image-pin-block__desc-link" href="#' . esc_attr( $target ) . '">' . esc_html( $description ) . '</a>'
+				: esc_html( $description );
 			?>
-			<?php if ( '' !== $raw_label || '' !== $description ) : ?>
-			<template class="image-pin-block__tpl-mobile" data-pin-id="<?php echo esc_attr( $pin_id ); ?>">
-				<?php if ( $show_desc_label ) : ?>
-					<div class="image-pin-block__desc-label"><?php echo esc_html( $raw_label ); ?></div>
-				<?php endif; ?>
-				<div class="image-pin-block__desc-body">
-					<?php if ( $mobile_needs_link && '' !== $target ) : ?>
-						<a class="image-pin-block__desc-link" href="#<?php echo esc_attr( $target ); ?>"><?php echo esc_html( $description ); ?></a>
-					<?php else : ?>
-						<?php echo esc_html( $description ); ?>
-					<?php endif; ?>
-				</div>
-			</template>
-			<?php endif; ?>
+			<template class="image-pin-block__tpl-mobile" data-pin-id="<?php echo esc_attr( $pin_id ); ?>"><div class="image-pin-block__desc-body"><?php echo $desc_html; ?></div></template>
 		<?php endforeach; ?>
 	</div>
 	<?php

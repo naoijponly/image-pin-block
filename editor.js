@@ -717,15 +717,16 @@
 		);
 	}
 
-	// モーダル内で編集中のピンの実際のラベル/説明文を、現在の「ポップオーバー」設定
+	// モーダル内で編集中のピンの実際の説明文を、現在の「ポップオーバー」設定
 	// (背景の不透明度・文字色・縁取り)を適用して、モーダル内の画像編集エリアの実画像の
 	// 上に表示する(v0.2.0でモーダル化。以前はブロック自身のキャンバスに表示していた)。
 	// 「背景を透過させたときに実画像の上でどう見えるか」を確認する目的のため、パネル内の
 	// 静的な見本ではなく、実際のポップオーバーと同じ考え方で描画する(こちらはエディタ
 	// 限定の表示で、render_callback の出力には一切影響しない)。
-	// ラベル・説明文がどちらも空のときは何も表示しない(下記参照)。
-	// ピンの%座標が画面のどちら寄りかに応じて、ポップオーバーがラベルの反対側(はみ出し
-	// にくい側)に出るよう transform の基準点を切り替える。
+	// 260918: PopoverはDescriptionのみを表示する(画像上のLabelと重複表示していた不具合を
+	// 修正。Labelは画像上にのみ表示する役割へ整理した。image-pin-block.php側の
+	// PC/Mobile templateも同様にLabel出力を削除済み)。説明文が空のときは何も表示しない
+	// (下記参照)。
 	function CanvasPopoverPreview( props ) {
 		var pin = props.pin;
 		var s = props.popoverSettings;
@@ -733,22 +734,13 @@
 		// 自体がZoom(transform: scale())の対象であり、このプレビューはその内側に描画される
 		// ため、ここでZoom倍率まで掛けると二重に拡大されてしまう(buildLabelStyleの
 		// labelFontSizeと同じ考え方)。
-		var hasLabelText = !! ( pin.label && '' !== pin.label );
 		var hasDescriptionText = !! ( pin.description && '' !== pin.description );
 
-		// ラベル・説明文がどちらも空のピンは、フロント側(image-pin-block.php)が
-		// ポップオーバーの<template>自体を出力しないのと同じ扱いで、プレビューも
-		// 何も表示しない。
-		if ( ! hasLabelText && ! hasDescriptionText ) {
+		// 説明文が空のピンは、フロント側(image-pin-block.php)がポップオーバーの
+		// <template>自体を出力しないのと同じ扱いで、プレビューも何も表示しない。
+		if ( ! hasDescriptionText ) {
 			return null;
 		}
-
-		var hasMarker = !! pin.markerImageUrl;
-		// ラベル未入力時は代替文字("Pin")を補わない。画像マーカーはこの扱いを既に
-		// していたが、丸マーカーも同じ扱いに揃える(image-pin-block.phpのshowLabel/
-		// $show_desc_labelと同じ考え方)。
-		var showLabel = hasMarker ? ( pin.showLabel !== false && hasLabelText ) : hasLabelText;
-		var labelText = pin.label || '';
 
 		var bgBase = s.backgroundColor || DEFAULT_POPOVER_BG_BASE;
 		var ratio = props.ratio || 1;
@@ -820,9 +812,6 @@
 		return el(
 			'div',
 			{ className: 'image-pin-block-editor__canvas-popover', style: boxStyle, ref: popoverRef },
-			showLabel
-				? el( 'div', { className: 'image-pin-block-editor__canvas-popover-label' }, labelText )
-				: null,
 			el( 'div', { className: 'image-pin-block-editor__canvas-popover-body' }, pin.description || '' )
 		);
 	}

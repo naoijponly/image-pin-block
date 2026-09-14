@@ -140,11 +140,6 @@
 	display: none;
 }
 
-.image-pin-block__desc-label {
-	font-weight: bold;
-	margin-bottom: 4px;
-}
-
 .image-pin-block__desc-link {
 	color: inherit;
 	text-decoration: underline;
