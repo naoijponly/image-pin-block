@@ -14,11 +14,6 @@
 	cursor: default;
 }
 
-/* モーダル内の画像編集エリア(v0.2.0)。クリックで新規ピンを追加できることを示す。 */
-.image-pin-block-editor__modal-canvas {
-	cursor: crosshair;
-}
-
 .image-pin-block-editor__image {
 	display: block;
 	max-width: 100%;
@@ -171,20 +166,14 @@
 	justify-content: center;
 }
 
-/* 編集用モーダル(v0.2.0)本体のレイアウト。
-   モーダル自体の高さを固定し(ビューポートに応じてmax-height)、外側のページは
-   スクロールさせない。中の各領域(左上・左下・右)がそれぞれ自分の分だけスクロールする。
-   width/max-width/heightは、@wordpress/componentsのModal既定サイズを確実に上書きする
-   必要があるため !important を付けている。 */
+/* 編集用モーダル(v0.2.0)本体のレイアウト。isFullScreen: true(WP標準のページ占有型
+   表示)を使うため、モーダル自体の幅・高さはWP側に任せ、ここでは独自に上書きしない。
+   中身(children-container)をflex columnにし、下のgridがその残り高さをすべて使う。 */
 .image-pin-block-editor__modal {
-	width: 95vw !important;
-	max-width: 920px !important;
-	height: 85vh !important;
-	max-height: 85vh !important;
 	display: flex;
 	flex-direction: column;
 	/* 内部のどこかでサイズ計算が崩れても、モーダルの外へ visible overflow で
-	   はみ出して「モーダル自体が伸びて見える」ことがないようにする保険。 */
+	   はみ出さないようにする保険。 */
 	overflow: hidden;
 }
 
@@ -205,74 +194,92 @@
 	padding: 0;
 }
 
-/* 左(60%)/右(40%)の2カラム。1行のグリッドで、両カラムの高さは常に揃う
-   (CSS Gridの既定の stretch により、右カラム=左カラムの合計の高さになる)。
-   grid-template-rows を明示せず auto(既定)のままだと、行の高さが
-   コンテンツ(=右カラムの中身の量)に合わせて伸びてしまい、結果として
-   モーダル自体がその分だけ高く見えてしまう不具合があった。
-   minmax(0, 1fr) を明示することで、行の高さは常にこのグリッド自身の
-   利用可能な高さ(=モーダルの85vhから決まる、コンテンツ量に左右されない
-   固定値)に固定され、はみ出す分は各カラム内でスクロールするようになる。 */
-/* 列側も同じ理由(暗黙のmin-widthがautoになる)でminmax(0, ...)にする。
-   素の "3fr 2fr" のままだと、右カラムの中身(ラベルの長い項目等)が3fr:2frの
-   本来の配分を超えて広がろうとし、想定より狭い/広い幅の奪い合いが起きる。 */
+/* 左(残り全部)/右(280〜320px程度の細い補助領域)の2カラム。広い画面ほど、
+   広くなった分は左(Preview側)へ渡す構造にするため、右は割合ではなく
+   clamp()で上限を設けた固定幅に近い値にする。
+   grid-template-rows を明示せず auto(既定)のままだと、右カラムの中身の量に
+   応じて行の高さが伸びてしまう不具合があったため、minmax(0, 1fr)を明示し、
+   行の高さは常にこのグリッド自身の利用可能な高さに固定している(右カラムが
+   それを超える場合は右カラム内だけでスクロールする)。列側も同じ理由で
+   minmax(0, ...)にする(素のfr値のままだと、中身の長い項目がその列の
+   本来の配分を超えて広がろうとし、列同士が重なって見える不具合があった)。 */
 .image-pin-block-editor__modal-grid {
 	flex: 1;
 	min-height: 0;
 	display: grid;
-	grid-template-columns: minmax( 0, 3fr ) minmax( 0, 2fr );
+	grid-template-columns: minmax( 0, 1fr ) clamp( 280px, 20vw, 320px );
 	grid-template-rows: minmax( 0, 1fr );
 }
 
-/* 左カラム: 上段(画像編集エリア)と下段(個別設定)を縦に積む。この2段の合計の高さで
-   右カラムの高さも決まる(右カラムがそれより長くなった場合は右カラム内だけがスクロール)。 */
+/* 左カラム: 上段(Preview+表示倍率+ピン一覧)と下段(個別設定)を縦に積む。 */
 .image-pin-block-editor__modal-left {
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
-	padding: 20px;
+	padding: 16px 20px;
 	overflow: hidden;
 }
 
-/* 上段(画像編集エリア+表示倍率+ピン一覧)。画像を主役にするため、下段(個別設定)より
-   確実に大きい取り分になるよう min-height: 60% を明示する(左カラムの高さのうち
-   最低60%を上段に割り当て、下段の中身の量に関わらずこの下限は保証される)。
-   下段(flex: 0 0 auto)がこの残り(最大40%)に収まらないほど肥大化した場合は、
-   .image-pin-block-editor__modal-left の overflow: hidden により下段の一部が
-   見えなくなる(下段はスクロールさせない方針のため。実用上問題が出るようであれば
-   別途相談する)。通常時は下段の中身(ヘルプ文をツールチップ化したため大幅に
-   コンパクトになった)がこの40%よりかなり小さいため、flex: 1 1 auto により
-   上段(画像)は60%よりもさらに大きい取り分を得る。 */
+/* 上段。縦方向は「ズーム(auto)→Preview(残り全部)→ピン一覧(auto)」の順。
+   Preview自体がflex: 1 1 autoで、上段の中で伸縮可能な唯一の領域になる
+   (ブラウザが広くなった分は、まずここへ渡る)。 */
 .image-pin-block-editor__modal-left-top {
 	flex: 1 1 auto;
-	min-height: 60%;
+	min-height: 0;
 	display: flex;
 	flex-direction: column;
 }
 
+/* 下段(個別設定)。内容量に応じて際限なく高くなりPreviewを圧迫することがないよう、
+   高さの上限を設け、それを超える分は内部だけでスクロールする(外側は巻き込まない)。 */
 .image-pin-block-editor__modal-left-bottom {
 	flex: 0 0 auto;
+	max-height: 280px;
+	overflow-y: auto;
 	padding-top: 16px;
 }
 
-/* 画像編集エリア: 常に画像全体が枠内に収まる(object-fit: containと同等の考え方)。
-   wrapper(.image-pin-block-editor__modal-canvas)自体の width/height は JS 側で
-   widthRatioから計算した実寸pxを指定しており、このコンテナはそれを中央寄せするだけ。
-   ズームで画像がこの枠より大きくなった場合のみ、overflow: auto でスクロールできる。 */
-.image-pin-block-editor__modal-image-box {
+/* Preview host: 利用可能な領域。ここへ16:9のviewportを最大containする
+   (JS側のfitAspectRatioIntoRect参照)。host自体はflexで中央寄せするだけで、
+   実際のサイズ決定・黒背景・overflow:hiddenはviewport側が担う。 */
+.image-pin-block-editor__modal-preview-host {
 	flex: 1 1 auto;
-	/* 個別設定(下段)の内容が多いときでも、画像エリアがこれ未満に潰れないようにする下限。
-	   これを優先するため、他の要素(ピン一覧カード・個別設定)側が窮屈になることがある
-	   (.image-pin-block-editor__modal-left の overflow: hidden により、収まりきらない
-	   分は見えなくなる。実用上問題が出るようであれば別途調整する)。 */
-	min-height: 300px;
+	min-height: 0;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	overflow: auto;
-	background: #f0f0f0;
-	border: 1px solid #e0e0e0;
 	margin: 8px 0 12px;
+}
+
+/* Preview viewport: 16:9固定・常に黒背景。画像の縦横比がviewportと異なる場合、
+   残りの部分はこの黒背景がそのまま見える(letterbox)。overflow: hiddenのため、
+   Zoomではみ出した画像はここで切り取られる(スクロールバーは出さない。
+   はみ出した部分はドラッグ=Panで見る)。 */
+.image-pin-block-editor__modal-preview-viewport {
+	position: relative;
+	overflow: hidden;
+	background: #000;
+	touch-action: none;
+	cursor: crosshair;
+}
+
+.image-pin-block-editor__modal-preview-viewport.is-zoomed {
+	cursor: grab;
+}
+
+.image-pin-block-editor__modal-preview-viewport.is-zoomed:active {
+	cursor: grabbing;
+}
+
+/* Pan layer: viewportいっぱいに広がり、flexで中央寄せした状態を基準位置とする。
+   実際のPan量はJS側でtransform: translate()として与える(このクラス自体には
+   transformを書かない)。 */
+.image-pin-block-editor__modal-pan-layer {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 .image-pin-block-editor__modal-canvas .image-pin-block-editor__image {
@@ -282,41 +289,51 @@
 	max-width: none;
 }
 
-/* 「ピン一覧」カード: 背景色・細い枠線・角丸で、画像編集エリア・個別設定とはっきり
-   区切る。 */
+/* 「ピン一覧」カード: 常に1行(折り返さない)。ピンの数が多い場合はタブ部分だけが
+   横スクロールし、「複製」「削除」は右側に固定表示する(ピンの数によってこのカードの
+   高さ、ひいてはPreviewの高さが変わらないようにするため)。 */
 .image-pin-block-editor__pin-list-card {
 	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 12px;
 	background: #f0f0f0;
 	border: 0.5px solid #ccc;
 	border-radius: 6px;
-	padding: 10px 12px;
+	padding: 8px 12px;
 }
 
-.image-pin-block-editor__pin-tabs {
+.image-pin-block-editor__pin-tabs-scroll {
+	flex: 1 1 auto;
+	min-width: 0;
 	display: flex;
-	flex-wrap: wrap;
+	flex-wrap: nowrap;
+	overflow-x: auto;
 	gap: 4px;
 }
 
 .image-pin-block-editor__pin-tab {
+	flex: 0 0 auto;
 	max-width: 160px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
+.image-pin-block-editor__pin-tab-add {
+	flex: 0 0 auto;
+}
+
 .image-pin-block-editor__pin-tab-actions {
+	flex: 0 0 auto;
 	display: flex;
 	gap: 8px;
-	margin-top: 8px;
-	padding-top: 8px;
-	border-top: 1px solid #ddd;
 }
 
 /* 個別設定(選択中のピンのみが対象。カードにはせず、区切り線を持つ3列に並べる)。
    列をminmax(0, 1fr)にし、各列にもmin-width: 0を明示する。素の1fr・min-width:auto
-   (既定)のままだと、長い文字列(ヘルプ文等)を含む列が本来の1/3幅を超えて広がろうと
-   し、列同士が重なって見える不具合があった。 */
+   (既定)のままだと、長い文字列を含む列が本来の1/3幅を超えて広がろうとし、
+   列同士が重なって見える不具合があった。 */
 .image-pin-block-editor__modal-individual-grid {
 	display: grid;
 	grid-template-columns: minmax( 0, 1fr ) minmax( 0, 1fr ) minmax( 0, 1fr );
@@ -361,39 +378,12 @@
 	cursor: help;
 }
 
-@media ( max-width: 782px ) {
-	.image-pin-block-editor__modal {
-		width: 100vw !important;
-		max-width: 100vw !important;
-		height: 100vh !important;
-		max-height: 100vh !important;
-	}
-
-	.image-pin-block-editor__modal-grid {
-		grid-template-columns: 1fr;
-		grid-auto-rows: auto;
-		overflow-y: auto;
-	}
-
-	.image-pin-block-editor__modal-individual-grid {
-		grid-template-columns: 1fr;
-	}
-
-	.image-pin-block-editor__modal-individual-col:not(:last-child) {
-		border-right: none;
-		border-bottom: 1px solid #e0e0e0;
-		padding-right: 0;
-		padding-bottom: 16px;
-		margin-bottom: 16px;
-	}
-}
-
 /* 右カラム: ブロック全体の設定。折りたたみ無しの常時展開で、縦一本の独立した領域として
    スクロールする(1列。右カラムの幅が狭いため2列にはしない)。 */
 .image-pin-block-editor__modal-right {
 	min-height: 0;
 	overflow-y: auto;
-	padding: 20px;
+	padding: 16px 20px;
 	border-left: 1px solid #e0e0e0;
 }
 
@@ -415,4 +405,70 @@
 	margin-top: 0;
 	padding-top: 0;
 	border-top: none;
+}
+
+/* 「Block-wide settings」Drawerの開閉トグル(ヘッダー内)。デスクトップ(右カラムが
+   常設される幅)では不要なため隠す。狭い画面用のメディアクエリで表示に切り替える。 */
+.image-pin-block-editor__modal-settings-toggle {
+	display: none;
+}
+
+.image-pin-block-editor__modal-drawer-backdrop {
+	display: none;
+}
+
+/* 狭い画面(目安900px): 右カラム(ブロック全体の設定)を常設のグリッド列から外し、
+   右からスライドインするDrawerに切り替える。新しいwp.components.Modalは使わず、
+   同じModalの内部でposition: fixedのパネルとして表示する。 */
+@media ( max-width: 900px ) {
+	.image-pin-block-editor__modal-grid {
+		grid-template-columns: minmax( 0, 1fr );
+	}
+
+	.image-pin-block-editor__modal-settings-toggle {
+		display: inline-flex;
+	}
+
+	.image-pin-block-editor__modal-right {
+		position: fixed;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		width: min( 360px, 90vw );
+		border-left: none;
+		background: #fff;
+		box-shadow: -2px 0 12px rgba( 0, 0, 0, 0.3 );
+		transform: translateX( 100% );
+		transition: transform 0.2s ease;
+		z-index: 1000;
+	}
+
+	.image-pin-block-editor__modal-right.is-drawer-open {
+		transform: translateX( 0 );
+	}
+
+	.image-pin-block-editor__modal-drawer-backdrop {
+		display: block;
+		position: fixed;
+		inset: 0;
+		background: rgba( 0, 0, 0, 0.3 );
+		z-index: 999;
+	}
+}
+
+/* さらに狭い画面(目安782px): 個別設定の3列を維持できないため、縦1列へ変更する
+   (Block-wide settingsは引き続きDrawerのまま。ここへ積み上げてしまうと、
+   Drawerと合わせて縦に長大な1本のフォームになってしまうため)。 */
+@media ( max-width: 782px ) {
+	.image-pin-block-editor__modal-individual-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.image-pin-block-editor__modal-individual-col:not(:last-child) {
+		border-right: none;
+		border-bottom: 1px solid #e0e0e0;
+		padding-right: 0;
+		padding-bottom: 16px;
+		margin-bottom: 16px;
+	}
 }
