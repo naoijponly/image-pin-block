@@ -185,15 +185,6 @@
 		return percentFromClientPoint( evt.clientX, evt.clientY, wrapperEl.getBoundingClientRect() );
 	}
 
-	// メニュー(「ここにピンを追加」)を配置するための、wrapper 基準のピクセル位置。
-	function pixelPointFromEvent( evt, wrapperEl ) {
-		var rect = wrapperEl.getBoundingClientRect();
-		return {
-			left: evt.clientX - rect.left,
-			top: evt.clientY - rect.top
-		};
-	}
-
 	// ピン内部の見た目(丸マーカー+ラベル横並び／画像マーカー+ラベル下表示)を組み立てる。
 	// 編集画面用。フロント側の見た目は image-pin-block.php 側で同じ構造を出力する。
 	// display: { pinSize, pinColor, labelBackgroundColor, labelTextColor, labelFontSize, widthRatio,
@@ -595,16 +586,16 @@
 		var isModalOpen = isModalOpenState[ 0 ];
 		var setIsModalOpen = isModalOpenState[ 1 ];
 
+		// モーダル内の画像編集エリア用のズーム倍率(50〜200%、表示のみ。保存される値には
+		// 影響しない)。モーダルを閉じるたびに100%へ戻す。
+		var modalZoomState = useState( MODAL_ZOOM_DEFAULT );
+		var modalZoom = modalZoomState[ 0 ];
+		var setModalZoom = modalZoomState[ 1 ];
+
 		function closeModal() {
 			setIsModalOpen( false );
+			setModalZoom( MODAL_ZOOM_DEFAULT );
 		}
-
-		// 「ここにピンを追加」メニュー。null のとき非表示。
-		// { x, y }: 追加時に使う%座標(メニューを開いた時点の値を保持する)
-		// { left, top }: メニュー自体の表示位置(px、wrapper基準)
-		var menuState = useState( null );
-		var pendingMenu = menuState[ 0 ];
-		var setPendingMenu = menuState[ 1 ];
 
 		var wrapperRef = useRef( null );
 		var blockProps = useBlockProps();
@@ -613,6 +604,8 @@
 		// 実際の表示幅との比率(widthRatio)を掛けてから描画する。これにより、画像が
 		// レスポンシブに縮小されてもピンが画像に対して同じ比率のまま拡縮する。
 		// 編集画面・フロントの両方で同じ考え方を使うことで見た目を一致させている。
+		// キャンバス(表示専用)とモーダル内の画像編集エリアは別々のDOM要素・別々の表示幅を
+		// 持つため、widthRatioもそれぞれ独立して計算する(modalWidthRatio参照)。
 		var widthRatioState = useState( 1 );
 		var widthRatio = widthRatioState[ 0 ];
 		var setWidthRatio = widthRatioState[ 1 ];
@@ -642,6 +635,39 @@
 
 		displaySettings.widthRatio = widthRatio;
 
+		var modalWrapperRef = useRef( null );
+
+		// モーダル側のwidthRatio。上と同じ考え方だが、モーダルは開いている間だけDOMが
+		// 存在する(isModalOpen && ... の条件付きレンダリング)ため、isModalOpenを依存配列に
+		// 含めて開いた時点で測り直す。ズーム(modalZoom)はCSSのtransform: scale()で
+		// 画像・ピンをまとめて拡大縮小するだけなので、この比率自体の再計算には影響しない。
+		var modalWidthRatioState = useState( 1 );
+		var modalWidthRatio = modalWidthRatioState[ 0 ];
+		var setModalWidthRatio = modalWidthRatioState[ 1 ];
+
+		useEffect( function() {
+			var wrapperEl = modalWrapperRef.current;
+			if ( ! isModalOpen || ! wrapperEl || ! attributes.imageUrl ) {
+				return;
+			}
+
+			function recalc() {
+				var naturalWidth = attributes.imageWidth || 0;
+				var currentWidth = wrapperEl.clientWidth;
+				var nextRatio = ( naturalWidth > 0 && currentWidth > 0 ) ? ( currentWidth / naturalWidth ) : 1;
+				setModalWidthRatio( nextRatio );
+			}
+
+			recalc();
+
+			if ( ! window.ResizeObserver ) {
+				return;
+			}
+			var ro = new window.ResizeObserver( recalc );
+			ro.observe( wrapperEl );
+			return function() { ro.disconnect(); };
+		}, [ isModalOpen, attributes.imageUrl, attributes.imageWidth ] );
+
 		// マーカー画像の実寸(naturalWidth、px)をピンIDごとにキャッシュする。
 		// <img> の読み込み完了(onLoad)時に記録し、buildPinContent() が上限クランプの計算に使う
 		// (MARKER_MAX_WIDTH_RATIO 参照)。
@@ -664,10 +690,13 @@
 		displaySettings.onMarkerImageLoad = handleMarkerImageLoad;
 
 		// マーカー画像の実際のDOM要素(<img>)をピンIDごとに保持する。再レンダリングを
-		// 発生させる必要が無いデータなので state ではなく ref で持つ。移動・リサイズ時に
-		// getBoundingClientRect() で実際の描画位置・サイズを測定し、「マーカー画像の外形が
-		// 本体画像の内側に収まる」よう範囲を制限するために使う(flexboxの中央寄せや
+		// 発生させる必要が無いデータなので state ではなく ref で持つ。モーダル内でのドラッグ
+		// 移動時に getBoundingClientRect() で実際の描画位置・サイズを測定し、「マーカー画像の
+		// 外形が本体画像の内側に収まる」よう移動範囲を制限するために使う(flexboxの中央寄せや
 		// ラベルの有無による見た目上の位置ずれを、数式で再現せず実測することで正確に扱う)。
+		// v0.2.0でモーダル化してからは、モーダル内の画像編集エリアの描画にのみ使う
+		// (表示専用のキャンバス側では登録しない。displaySettingsではなくmodalDisplaySettings
+		// 経由でbuildPinContentに渡す)。
 		var markerImageRefsRef = useRef( {} );
 		function registerMarkerImageRef( pinId, node ) {
 			if ( node ) {
@@ -676,112 +705,6 @@
 				delete markerImageRefsRef.current[ pinId ];
 			}
 		}
-		displaySettings.registerMarkerImageRef = registerMarkerImageRef;
-
-		// マーカー画像のリサイズハンドルのドラッグ操作。ハンドルは選択中のピンにしか
-		// 表示されないため、常に「選択中かつ画像マーカーを持つピン」に対して呼ばれる。
-		// handlePinPointerDown(位置移動)と同様、setPointerCapture でハンドル要素自身に
-		// 以降の pointermove/pointerup を固定する(handleEl 側で stopPropagation 済みのため
-		// ピン本体側の位置移動ハンドラとは競合しない)。
-		function handleMarkerResizePointerDown( pinId, evt ) {
-			evt.preventDefault();
-			var pin = pins.filter( function( p ) { return p.id === pinId; } )[ 0 ];
-			var naturalW = markerNaturalWidths[ pinId ] || 0;
-			var wrapperEl = wrapperRef.current;
-			if ( ! pin || naturalW <= 0 || ! wrapperEl ) {
-				return;
-			}
-
-			var ratio = widthRatio || 1;
-			var mainWidth = attributes.imageWidth || 0;
-			// 本体画像の幅が不明な場合は、markerScale の上限(MARKER_SCALE_MAX)自体を上限とする
-			// (MARKER_MAX_WIDTH_RATIO による追加の上限は適用しない)。
-			var maxBaseWidthFromRatio = ( mainWidth > 0 ) ? ( mainWidth * MARKER_MAX_WIDTH_RATIO ) : ( naturalW * MARKER_SCALE_MAX / 100 );
-
-			// マーカー画像の外形が本体画像の内側に収まるよう、表示幅にもう一つ上限を設ける。
-			// flexboxの中央寄せにより、マーカー画像はラベルの有無・高さに関わらず「自分自身の
-			// 中心点」を軸に拡大縮小される(位置は変わらない)ため、ドラッグ開始時点で測定した
-			// その中心点と本体画像の四辺との距離のうち、最も小さいものが拡大できる限度になる。
-			var markerImgEl = markerImageRefsRef.current[ pinId ];
-			var maxDisplayWidthFromContainment = Number.POSITIVE_INFINITY;
-			if ( markerImgEl ) {
-				var imgRect0 = markerImgEl.getBoundingClientRect();
-				if ( imgRect0.width > 0 && imgRect0.height > 0 ) {
-					var aspectRatio = imgRect0.width / imgRect0.height;
-					var imageCenterX = imgRect0.left + imgRect0.width / 2;
-					var imageCenterY = imgRect0.top + imgRect0.height / 2;
-					var wRect0 = wrapperEl.getBoundingClientRect();
-					var maxWidthFromLeft = 2 * ( imageCenterX - wRect0.left );
-					var maxWidthFromRight = 2 * ( wRect0.right - imageCenterX );
-					var maxWidthFromTop = 2 * ( imageCenterY - wRect0.top ) * aspectRatio;
-					var maxWidthFromBottom = 2 * ( wRect0.bottom - imageCenterY ) * aspectRatio;
-					maxDisplayWidthFromContainment = Math.max( 0, Math.min( maxWidthFromLeft, maxWidthFromRight, maxWidthFromTop, maxWidthFromBottom ) );
-				}
-			}
-
-			// 上記2つの上限(本体画像幅の50%、画像内に収まる範囲)のうち、より厳しい方を採用する。
-			var maxDisplayWidth = Math.min( maxBaseWidthFromRatio * ratio, maxDisplayWidthFromContainment );
-			var maxBaseWidth = maxDisplayWidth / ratio;
-
-			// ドラッグで到達できる markerScale の実効範囲。表示幅の上限・下限(px)を
-			// markerScale(%)に換算し、既存の 1〜500% の範囲内に収める。
-			var effectiveMaxScale = clampToRange( ( maxBaseWidth / naturalW ) * 100, MARKER_SCALE_MIN, MARKER_SCALE_MAX );
-			var minScaleForFloor = ( MARKER_MIN_DISPLAY_WIDTH_PX / ratio / naturalW ) * 100;
-			var effectiveMinScale = clampToRange( minScaleForFloor, MARKER_SCALE_MIN, effectiveMaxScale );
-
-			var startScale = resolveMarkerScale( pin );
-			var startBaseWidth = Math.min( naturalW * ( startScale / 100 ), maxBaseWidth );
-			var startDisplayWidth = startBaseWidth * ratio;
-
-			var pointerId = evt.pointerId;
-			var handleEl = evt.currentTarget;
-			var startClientX = evt.clientX;
-
-			if ( handleEl.setPointerCapture ) {
-				handleEl.setPointerCapture( pointerId );
-			}
-
-			function handleMove( moveEvt ) {
-				if ( moveEvt.pointerId !== pointerId ) {
-					return;
-				}
-				moveEvt.stopPropagation();
-				var deltaX = moveEvt.clientX - startClientX;
-				var newDisplayWidth = clampToRange( startDisplayWidth + deltaX, MARKER_MIN_DISPLAY_WIDTH_PX, maxDisplayWidth );
-				var newScale = ( newDisplayWidth / ratio / naturalW ) * 100;
-				newScale = clampToRange( newScale, effectiveMinScale, effectiveMaxScale );
-				newScale = Math.round( newScale * 10 ) / 10;
-				updatePins(
-					pins.map( function( p ) {
-						if ( p.id !== pinId ) {
-							return p;
-						}
-						return Object.assign( {}, p, { markerScale: newScale } );
-					} )
-				);
-			}
-
-			function endDrag( endEvt ) {
-				if ( endEvt && endEvt.pointerId !== pointerId ) {
-					return;
-				}
-				if ( endEvt ) {
-					endEvt.stopPropagation();
-				}
-				if ( handleEl.hasPointerCapture && handleEl.hasPointerCapture( pointerId ) ) {
-					handleEl.releasePointerCapture( pointerId );
-				}
-				handleEl.removeEventListener( 'pointermove', handleMove );
-				handleEl.removeEventListener( 'pointerup', endDrag );
-				handleEl.removeEventListener( 'pointercancel', endDrag );
-			}
-
-			handleEl.addEventListener( 'pointermove', handleMove );
-			handleEl.addEventListener( 'pointerup', endDrag );
-			handleEl.addEventListener( 'pointercancel', endDrag );
-		}
-
-		displaySettings.onMarkerResizePointerDown = handleMarkerResizePointerDown;
 
 		// getBlocksByName() はブロックエディタのストアが保持する索引を使うため、
 		// 投稿内の全ブロックを毎回手動で走査する(旧実装)より効率的で、記事のブロック数が
@@ -815,49 +738,19 @@
 		var targetOptions = [ { value: '', label: __( '(None selected)', 'image-pin-block' ) } ]
 			.concat( buildHeadingOptions( headingBlocks || [] ) );
 
-		// メニュー表示中のみ、画像の外へのクリックとEscキーで閉じるリスナーを張る。
+		// モーダルを開いたとき、あるいはピンの追加・削除でselectedPinIdが指すピンが
+		// 無くなったときに、編集対象を自動的に選び直す(先頭のピン、無ければnull)。
+		// v0.2.0より前はキャンバス上でクリックして選ぶ方式だったため未選択のまま開く
+		// ことは無かったが、モーダル化後は「開いた時点で何を編集するか」を決める必要がある。
 		useEffect( function() {
-			if ( ! pendingMenu ) {
+			if ( ! isModalOpen ) {
 				return;
 			}
-
-			function handleDocClick( evt ) {
-				if ( wrapperRef.current && wrapperRef.current.contains( evt.target ) ) {
-					return;
-				}
-				setPendingMenu( null );
+			var exists = pins.some( function( p ) { return p.id === selectedPinId; } );
+			if ( ! exists ) {
+				setSelectedPinId( pins.length ? pins[ 0 ].id : null );
 			}
-
-			function handleKeyDown( evt ) {
-				if ( evt.key === 'Escape' ) {
-					setPendingMenu( null );
-				}
-			}
-
-			document.addEventListener( 'click', handleDocClick );
-			document.addEventListener( 'keydown', handleKeyDown );
-
-			return function() {
-				document.removeEventListener( 'click', handleDocClick );
-				document.removeEventListener( 'keydown', handleKeyDown );
-			};
-		}, [ pendingMenu ] );
-
-		// 上記の「画像の外へのクリックで閉じる」だけでは拾いきれないケースを補う。
-		// ブロックエディタの投稿本文キャンバスはWordPress 5.9以降 iframe 内に描画されており、
-		// 上記の document は iframe内のdocumentのため、iframeの外側(ページの余白など、
-		// 管理画面本体側)のクリックはそもそもこのリスナーに届かない。ブロックの選択状態
-		// (props.isSelected)はWordPress本体のストアがiframeの内外を問わず管理しているため、
-		// これが false になった時点でもメニューを閉じるようにし、隙間を補う。
-		// 既存の「画像の外へのクリックで閉じる」仕組みとは競合しない(同じブロックを選択した
-		// ままの操作ではisSelectedは変化しない。ブロックを選択し直す1回のクリックでメニューを
-		// 開く場合も、選択とメニュー表示は同一クリック内でまとめて反映されるため、開いた直後に
-		// このeffectが誤って閉じることはない)。
-		useEffect( function() {
-			if ( ! props.isSelected ) {
-				setPendingMenu( null );
-			}
-		}, [ props.isSelected ] );
+		}, [ isModalOpen, pins, selectedPinId ] );
 
 		function updatePins( nextPins ) {
 			setAttributes( { pins: nextPins } );
@@ -883,36 +776,19 @@
 			setAttributes( updates );
 		}
 
-		// 画像上の「何もない場所」をクリック → その位置に「ここにピンを追加」メニューを表示する。
-		// (ピン自体のクリック・ドラッグ、メニュー自体のクリックは stopPropagation されているため、
-		// ここに来るのは常に「ピン・ドラッグ・メニュー操作のいずれでもないクリック」のみ)。
-		// このクリックは、選択中のピンがあればその作業を終えたという意思表示とみなし、
-		// 選択も解除する(ポップオーバーのプレビューも連動して消える)。
-		function handleWrapperClick( evt ) {
-			var wrapperEl = wrapperRef.current;
-			var point = pointFromEvent( evt, wrapperEl );
-			if ( ! point || ! wrapperEl ) {
-				return;
-			}
-			var pixel = pixelPointFromEvent( evt, wrapperEl );
-			setSelectedPinId( null );
-			setPendingMenu( {
-				x: point.x,
-				y: point.y,
-				left: pixel.left,
-				top: pixel.top
-			} );
+		// キャンバス(表示専用)をダブルクリックすると編集モーダルを開く。
+		function handleCanvasDoubleClick() {
+			setIsModalOpen( true );
 		}
 
-		// メニューの「ここにピンを追加」。メニューを開いた時点の%座標をそのまま使う。
-		function addPinFromMenu() {
-			if ( ! pendingMenu ) {
-				return;
-			}
+		// 新規ピンを%座標(x, y)の位置に追加し、選択状態にする。
+		// モーダル内の画像クリック(handleModalImageClick)・「+」ボタン(addPinAtCenter)の
+		// 両方から使う共通処理。
+		function createPinAt( x, y ) {
 			var newPin = {
 				id: generatePinId( pins ),
-				x: pendingMenu.x,
-				y: pendingMenu.y,
+				x: x,
+				y: y,
 				label: '',
 				description: '',
 				target: '',
@@ -923,17 +799,54 @@
 			};
 			updatePins( pins.concat( [ newPin ] ) );
 			setSelectedPinId( newPin.id );
-			setPendingMenu( null );
 		}
 
-		function handlePinPointerDown( pinId, evt ) {
-			// ドラッグ開始時点でこのピンを選択状態にする(ドラッグ終了後も維持する)。
+		// モーダル内、画像上の「何もない場所」をクリックすると、その位置に即座に新規ピンを
+		// 追加する(v0.1.x系にあった確認メニューは廃止。編集専用のモーダル内での操作のため、
+		// 誤クリック防止の確認ステップは不要と判断した)。
+		// ピン自体のクリック・ドラッグは stopPropagation されているため、ここに来るのは
+		// 常に「ピン・ドラッグ操作のいずれでもないクリック」のみ。
+		function handleModalImageClick( evt ) {
+			var wrapperEl = modalWrapperRef.current;
+			var point = pointFromEvent( evt, wrapperEl );
+			if ( ! point ) {
+				return;
+			}
+			createPinAt( point.x, point.y );
+		}
+
+		// モーダル内、「ピン一覧」の「+」ボタン。画像中央に新規ピンを追加する。
+		function addPinAtCenter() {
+			createPinAt( 50, 50 );
+		}
+
+		// 選択中のピンを複製する。位置が完全に重なると掴みにくいため、少しずらして配置する。
+		function duplicateSelectedPin() {
+			if ( ! selectedPin ) {
+				return;
+			}
+			var newPin = Object.assign( {}, selectedPin, {
+				id: generatePinId( pins ),
+				x: clampPercent( selectedPin.x + DUPLICATE_OFFSET_PERCENT ),
+				y: clampPercent( selectedPin.y + DUPLICATE_OFFSET_PERCENT )
+			} );
+			updatePins( pins.concat( [ newPin ] ) );
+			setSelectedPinId( newPin.id );
+		}
+
+		// モーダル内、画像編集エリアでのピンのドラッグ移動。ポインタダウンした時点でそのピンを
+		// 選択状態にする(クリックのみで移動しない場合も、これにより選択が切り替わる)。
+		// v0.1.x系ではブロック自身のキャンバス(wrapperRef)に対して行っていたが、v0.2.0で
+		// モーダル内の画像編集エリア(modalWrapperRef)に置き換えた。ズーム(modalZoom)は
+		// transform: scale() で見た目だけを拡大縮小しており、getBoundingClientRect() は
+		// 常に画面上の実際の見た目のサイズ・位置を返すため、ズーム倍率に関わらずこの関数は
+		// 変更なしで正しく動作する。
+		function handleModalPinPointerDown( pinId, evt ) {
 			evt.stopPropagation();
 			evt.preventDefault();
-			setPendingMenu( null );
 			setSelectedPinId( pinId );
 
-			var wrapperEl = wrapperRef.current;
+			var wrapperEl = modalWrapperRef.current;
 			if ( ! wrapperEl ) {
 				return;
 			}
@@ -1017,19 +930,12 @@
 				pinEl.removeEventListener( 'pointermove', handleMove );
 				pinEl.removeEventListener( 'pointerup', endDrag );
 				pinEl.removeEventListener( 'pointercancel', endDrag );
-				// ドラッグ終了後も選択状態を維持し、サイドバーの「ピン設定」を表示し続ける。
 				setSelectedPinId( pinId );
 			}
 
 			pinEl.addEventListener( 'pointermove', handleMove );
 			pinEl.addEventListener( 'pointerup', endDrag );
 			pinEl.addEventListener( 'pointercancel', endDrag );
-		}
-
-		function handlePinClick( pinId, evt ) {
-			evt.stopPropagation();
-			setPendingMenu( null );
-			setSelectedPinId( pinId );
 		}
 
 		// 選択中のピンに複数フィールドをまとめて反映する。
@@ -1079,8 +985,9 @@
 		} );
 
 		// v0.2.0で編集UIをモーダルに集約したため、サイドバーには「ピンを編集」ボタンのみを置く。
-		// 旧「Display settings」「Pin color」「Pin label」「Popover」の各パネルは
-		// モーダル内の「ブロック全体の設定」に移設した(blockSettingsPanel参照)。
+		// 旧「Display settings」「Pin color」「Pin label」「Popover」パネルはモーダル内の
+		// 「ブロック全体の設定」(blockSettingsPanel)へ、旧「Pin settings」パネルは
+		// モーダル内の「画像＋右の基本設定」「ピン一覧」「マーカー画像」へ、それぞれ移設した。
 		var inspector = el(
 			InspectorControls,
 			{},
@@ -1093,114 +1000,6 @@
 						className: 'image-pin-block-editor__open-modal-button',
 						onClick: function() { setIsModalOpen( true ); }
 					}, __( 'Edit pins', 'image-pin-block' ) )
-				)
-				: null,
-			selectedPin
-				? el(
-					PanelBody,
-					{ title: __( 'Pin settings', 'image-pin-block' ) },
-					// マーカー画像があり、かつ「ラベルを表示する」がオフのときはラベル入力を隠す。
-					( ! selectedPin.markerImageUrl || selectedPin.showLabel !== false )
-						? el( TextControl, {
-							label: __( 'Label', 'image-pin-block' ),
-							value: selectedPin.label,
-							onChange: function( value ) { updateSelectedPin( 'label', value ); }
-						} )
-						: null,
-					el( 'p', { className: 'image-pin-block-editor__marker-heading' }, __( 'Marker image', 'image-pin-block' ) ),
-					selectedPin.markerImageUrl
-						? el(
-							'div',
-							{ className: 'image-pin-block-editor__marker-preview' },
-							el( 'img', { src: selectedPin.markerImageUrl, alt: '' } ),
-							el(
-								MediaUploadCheck,
-								{},
-								el( MediaUpload, {
-									onSelect: handleSelectMarkerImage,
-									value: selectedPin.markerImageId,
-									allowedTypes: [ 'image/png', 'image/jpeg' ],
-									render: function( obj ) {
-										return el(
-											Button,
-											{ variant: 'secondary', onClick: obj.open },
-											__( 'Change marker image', 'image-pin-block' )
-										);
-									}
-								} )
-							),
-							el(
-								Button,
-								{ variant: 'tertiary', isDestructive: true, onClick: clearMarkerImage },
-								__( 'Remove marker image', 'image-pin-block' )
-							)
-						)
-						: el(
-							MediaUploadCheck,
-							{},
-							el( MediaUpload, {
-								onSelect: handleSelectMarkerImage,
-								allowedTypes: [ 'image/png', 'image/jpeg' ],
-								render: function( obj ) {
-									return el(
-										Button,
-										{ variant: 'secondary', onClick: obj.open },
-										__( 'Select marker image', 'image-pin-block' )
-									);
-								}
-							} )
-						),
-					selectedPin.markerImageUrl
-						? el( ClampedNumberControl, {
-							// key にピンID + 現在値を含め、リサイズハンドルのドラッグで markerScale が
-							// 変わった際にも表示を追従させる(値が変わるたびに再マウントし、下書き状態を
-							// 現在値でリセットする)。ドラッグ以外(このフィールドへの入力中)は
-							// 属性値自体が変わらないため、入力途中の下書きが失われることはない。
-							key: selectedPinId + ':' + ( selectedPin.markerScale || DEFAULT_MARKER_SCALE ),
-							label: __( 'Marker image scale (%)', 'image-pin-block' ),
-							value: selectedPin.markerScale || DEFAULT_MARKER_SCALE,
-							min: MARKER_SCALE_MIN,
-							max: MARKER_SCALE_MAX,
-							defaultValue: DEFAULT_MARKER_SCALE,
-							onCommit: function( n ) {
-								updateSelectedPin( 'markerScale', n );
-							}
-						} )
-						: null,
-					selectedPin.markerImageUrl
-						? el( CheckboxControl, {
-							label: __( 'Show label', 'image-pin-block' ),
-							checked: selectedPin.showLabel !== false,
-							onChange: function( checked ) { updateSelectedPin( 'showLabel', checked ); }
-						} )
-						: null,
-					el( TextareaControl, {
-						label: __( 'Description', 'image-pin-block' ),
-						value: selectedPin.description,
-						onChange: function( value ) { updateSelectedPin( 'description', value ); }
-					} ),
-					el( SelectControl, {
-						label: __( 'Choose target heading', 'image-pin-block' ),
-						help: __( 'Only heading blocks with an HTML anchor set appear as options. If the heading you want isn\'t listed, set an HTML anchor for it under Advanced settings, or type the anchor name directly in the field below.', 'image-pin-block' ),
-						value: selectedPin.target,
-						options: targetOptions,
-						onChange: function( value ) { updateSelectedPin( 'target', value ); }
-					} ),
-					el( TextControl, {
-						label: __( 'Enter target anchor manually', 'image-pin-block' ),
-						help: __( 'For destinations that don\'t appear in the dropdown, such as non-heading blocks, enter the anchor name directly. You don\'t need to include the # symbol.', 'image-pin-block' ),
-						value: selectedPin.target,
-						onChange: function( value ) { updateSelectedPin( 'target', value.replace( /#/g, '' ).trim() ); }
-					} ),
-					el(
-						Button,
-						{
-							isDestructive: true,
-							variant: 'secondary',
-							onClick: removeSelectedPin
-						},
-						__( 'Delete this pin', 'image-pin-block' )
-					)
 				)
 				: null
 		);
@@ -1383,74 +1182,269 @@
 			)
 		);
 
-		// キャンバス表示(ピンのラベル・ポップオーバープレビュー)専用の見た目設定。
-		// ドラッグ中はライブプレビュー値を、それ以外は確定済みの値を使う。
-		// displaySettings/popoverSettings 自体(ColorInputRowのスウォッチ・
-		// ColorPicker自体のcolorプロパティに使われる)には、このプレビュー値を混ぜない。
-		var canvasDisplaySettings = Object.assign( {}, displaySettings, {
+		// ブロック自身のキャンバスは v0.2.0 より表示専用(ドラッグ・クリックでの選択・追加は
+		// すべてモーダル内に集約した)。プレビュー中の色は反映せず、確定済みの値のみを使う
+		// (ドラッグ中のライブプレビューはモーダルを開いている間しか意味を持たないため)。
+		var pinElements = pins.map( function( pin ) {
+			return el(
+				'div',
+				{
+					key: pin.id,
+					className: 'image-pin-block-editor__pin'
+						+ ( pin.markerImageUrl ? ' has-marker-image' : '' ),
+					style: { left: clampPercent( pin.x ) + '%', top: clampPercent( pin.y ) + '%' }
+				},
+				buildPinContent( pin, displaySettings )
+			);
+		} );
+
+		// モーダル内の画像編集エリア専用の見た目設定。ドラッグ中のライブプレビュー値を
+		// 反映し(canvasDisplaySettingsという名前だったものをv0.2.0でモーダル専用にした)、
+		// ドラッグ移動時の範囲制限に使うDOM参照登録も渡す。displaySettings自体
+		// (ColorInputRowのスウォッチ・ColorPicker自体のcolorプロパティに使われる)には、
+		// このプレビュー値を混ぜない。widthRatioも、モーダル自身の表示幅を基準にした
+		// modalWidthRatioに差し替える。
+		var modalDisplaySettings = Object.assign( {}, displaySettings, {
 			labelBackgroundColor: resolveColorPreview( 'labelBackgroundColor', displaySettings.labelBackgroundColor ),
 			labelTextColor: resolveColorPreview( 'labelTextColor', displaySettings.labelTextColor ),
-			labelStrokeColor: resolveColorPreview( 'labelStrokeColor', displaySettings.labelStrokeColor )
+			labelStrokeColor: resolveColorPreview( 'labelStrokeColor', displaySettings.labelStrokeColor ),
+			widthRatio: modalWidthRatio,
+			registerMarkerImageRef: registerMarkerImageRef
 		} );
-		var canvasPopoverSettings = Object.assign( {}, popoverSettings, {
+		var modalPopoverSettings = Object.assign( {}, popoverSettings, {
 			backgroundColor: resolveColorPreview( 'popoverBackgroundColor', popoverSettings.backgroundColor ),
 			textColor: resolveColorPreview( 'popoverTextColor', popoverSettings.textColor ),
 			strokeColor: resolveColorPreview( 'popoverStrokeColor', popoverSettings.strokeColor )
 		} );
 
-		var pinElements = pins.map( function( pin ) {
-			var isSelected = pin.id === selectedPinId;
+		var modalPinElements = pins.map( function( pin ) {
+			var isPinSelected = pin.id === selectedPinId;
 			return el(
 				'button',
 				{
 					key: pin.id,
 					type: 'button',
 					className: 'image-pin-block-editor__pin'
-						+ ( isSelected ? ' is-selected' : '' )
+						+ ( isPinSelected ? ' is-selected' : '' )
 						+ ( pin.markerImageUrl ? ' has-marker-image' : '' ),
 					style: { left: clampPercent( pin.x ) + '%', top: clampPercent( pin.y ) + '%' },
-					onPointerDown: function( evt ) { handlePinPointerDown( pin.id, evt ); },
-					onClick: function( evt ) { handlePinClick( pin.id, evt ); }
+					onPointerDown: function( evt ) { handleModalPinPointerDown( pin.id, evt ); },
+					// pointerdown側のstopPropagationは、後続の(別イベントである)clickの
+					// バブリングまでは止めない。ここで止めないと、既存ピンをクリックしただけ
+					// (ドラッグなし)でも click が画像側(handleModalImageClick)まで届き、
+					// 同じ位置に意図しない新規ピンが追加されてしまう。
+					onClick: function( evt ) { evt.stopPropagation(); }
 				},
-				buildPinContent( pin, canvasDisplaySettings, isSelected )
+				buildPinContent( pin, modalDisplaySettings )
 			);
 		} );
 
-		// 画像上の何もない場所をクリックしたときに出す「ここにピンを追加」メニュー。
-		var menuElement = pendingMenu
-			? el(
-				'div',
-				{
-					className: 'image-pin-block-editor__menu',
-					style: { left: pendingMenu.left + 'px', top: pendingMenu.top + 'px' },
-					onClick: function( evt ) { evt.stopPropagation(); }
-				},
-				el(
-					Button,
-					{ variant: 'secondary', onClick: addPinFromMenu },
-					__( 'Add a pin here', 'image-pin-block' )
-				)
-			)
+		// 選択中のピンのポップオーバーを、現在の「ポップオーバー」設定を反映した状態で
+		// モーダル内の画像編集エリアの実画像の上に表示する(CanvasPopoverPreview参照。
+		// ラベル・説明文がどちらも空のときは何も表示しない)。
+		var modalPopoverElement = selectedPin
+			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: modalPopoverSettings } )
 			: null;
 
-		// 選択中のピンのポップオーバーを、現在の「ポップオーバー」設定を反映した状態で
-		// 実画像の上に表示する(CanvasPopoverPreview 参照)。
-		//
-		// props.isSelected(このブロック自体が選択されているか)も条件に加える理由:
-		// selectedPinId はピン削除時にしかクリアされないため、selectedPin の有無だけで
-		// 判定すると、ブロックの選択が外れた後(他のブロックを選択した/画像の外をクリック
-		// してブロックが非選択になった等)もプレビューが表示され続けてしまう。
-		// 「Pin settings」パネル(InspectorControls内)は、WordPress自身がブロック選択中
-		// のみ表示する仕組み(Slot/Fill)に乗っているため同じ問題が起きないが、こちらは
-		// InspectorControlsの外(ブロック自身のキャンバス出力)に描画しているため、
-		// 同等の判定をこちらで明示的に行う必要がある。
-		//
-		// 「ここにピンを追加」メニューが使っている「wrapperRef外クリックで閉じる」方式は
-		// 採用しない。サイドバーの色・不透明度コントロールはDOM上wrapperRefの外にあるため、
-		// その方式だとコントロール操作中にプレビューが消えてしまい、ライブプレビューとして
-		// 機能しなくなる。isSelectedはサイドバー操作中も真のままなのでこの問題が起きない。
-		var canvasPopoverElement = ( props.isSelected && selectedPin )
-			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: canvasPopoverSettings } )
+		// 「画像＋右の基本設定」左側: 画像編集エリア。ズームは transform: scale() で
+		// 見た目だけを拡大縮小する(コンテナ自体のレイアウト上の幅は変えないため、
+		// パーセント座標のクリック判定・ドラッグ判定はgetBoundingClientRect()を使う限り
+		// ズーム倍率に関わらず正しく動作する。詳細はhandleModalPinPointerDown参照)。
+		var modalImageArea = el(
+			'div',
+			{ className: 'image-pin-block-editor__modal-image-scroll' },
+			el(
+				'div',
+				{
+					ref: modalWrapperRef,
+					className: 'image-pin-block-editor__wrapper image-pin-block-editor__modal-canvas',
+					style: { transform: 'scale(' + ( modalZoom / 100 ) + ')', transformOrigin: 'top left' },
+					onClick: handleModalImageClick
+				},
+				el( 'img', {
+					className: 'image-pin-block-editor__image',
+					src: attributes.imageUrl,
+					alt: ''
+				} ),
+				modalPinElements,
+				modalPopoverElement
+			)
+		);
+
+		// 「画像＋右の基本設定」右側: 選択中のピンの基本設定。開閉で高さが変動する要素・
+		// 横幅を要する要素は置かない(ラベル入力欄は showLabel の状態に関わらず常に表示する。
+		// 「Show label」はマーカー画像の見た目にのみ影響し、入力欄自体の表示/非表示には
+		// 使わない)。
+		var modalBasicSettings = selectedPin
+			? el(
+				'div',
+				{ className: 'image-pin-block-editor__modal-basic-settings' },
+				el( TextControl, {
+					label: __( 'Label', 'image-pin-block' ),
+					value: selectedPin.label,
+					onChange: function( value ) { updateSelectedPin( 'label', value ); }
+				} ),
+				selectedPin.markerImageUrl
+					? el( CheckboxControl, {
+						label: __( 'Show label', 'image-pin-block' ),
+						checked: selectedPin.showLabel !== false,
+						onChange: function( checked ) { updateSelectedPin( 'showLabel', checked ); }
+					} )
+					: null,
+				el( TextareaControl, {
+					label: __( 'Description', 'image-pin-block' ),
+					value: selectedPin.description,
+					onChange: function( value ) { updateSelectedPin( 'description', value ); }
+				} ),
+				el( SelectControl, {
+					label: __( 'Choose target heading', 'image-pin-block' ),
+					help: __( 'Only heading blocks with an HTML anchor set appear as options. If the heading you want isn\'t listed, set an HTML anchor for it under Advanced settings, or type the anchor name directly in the field below.', 'image-pin-block' ),
+					value: selectedPin.target,
+					options: targetOptions,
+					onChange: function( value ) { updateSelectedPin( 'target', value ); }
+				} ),
+				el( TextControl, {
+					label: __( 'Enter target anchor manually', 'image-pin-block' ),
+					help: __( 'For destinations that don\'t appear in the dropdown, such as non-heading blocks, enter the anchor name directly. You don\'t need to include the # symbol.', 'image-pin-block' ),
+					value: selectedPin.target,
+					onChange: function( value ) { updateSelectedPin( 'target', value.replace( /#/g, '' ).trim() ); }
+				} )
+			)
+			: el(
+				'div',
+				{ className: 'image-pin-block-editor__modal-basic-settings' },
+				el( 'p', {}, __( 'Click the image to add a pin.', 'image-pin-block' ) )
+			);
+
+		// 「画像＋右の基本設定」の行。左は常時表示の画像編集エリア(ズームスライダー付き)、
+		// 右は選択中のピンの基本設定。この行自体の高さは、上の「ブロック全体の設定」の
+		// 開閉状態に影響されない(通常のドキュメントフローで独立している)。
+		var modalMainRow = el(
+			'div',
+			{ className: 'image-pin-block-editor__modal-main-row' },
+			el(
+				'div',
+				{},
+				el( RangeControl, {
+					label: __( 'Zoom (%)', 'image-pin-block' ),
+					value: modalZoom,
+					min: MODAL_ZOOM_MIN,
+					max: MODAL_ZOOM_MAX,
+					onChange: function( value ) {
+						setModalZoom( ( typeof value === 'number' ) ? value : MODAL_ZOOM_DEFAULT );
+					}
+				} ),
+				modalImageArea
+			),
+			modalBasicSettings
+		);
+
+		// 「ピン一覧」: ピンをタブ状に並べ、クリックで編集対象を切り替える。「+」で
+		// 画像中央に新規ピンを追加する。「複製」「削除」は選択中のピンに対して行う。
+		var pinTabsRow = el(
+			'div',
+			{ className: 'image-pin-block-editor__pin-tabs' },
+			pins.map( function( pin, index ) {
+				return el(
+					Button,
+					{
+						key: pin.id,
+						variant: ( pin.id === selectedPinId ) ? 'primary' : 'secondary',
+						className: 'image-pin-block-editor__pin-tab',
+						onClick: function() { setSelectedPinId( pin.id ); }
+					},
+					pin.label || ( __( 'Pin', 'image-pin-block' ) + ' ' + ( index + 1 ) )
+				);
+			} ),
+			el( Button, {
+				variant: 'secondary',
+				icon: 'plus',
+				label: __( 'Add pin', 'image-pin-block' ),
+				onClick: addPinAtCenter
+			} )
+		);
+
+		var pinTabActionsRow = el(
+			'div',
+			{ className: 'image-pin-block-editor__pin-tab-actions' },
+			el( Button, {
+				variant: 'secondary',
+				disabled: ! selectedPin,
+				onClick: duplicateSelectedPin
+			}, __( 'Duplicate pin', 'image-pin-block' ) ),
+			el( Button, {
+				variant: 'secondary',
+				isDestructive: true,
+				disabled: ! selectedPin,
+				onClick: removeSelectedPin
+			}, __( 'Delete this pin', 'image-pin-block' ) )
+		);
+
+		// 「マーカー画像」: 選択中のピンごとの設定。項目数が少ないため常時展開の
+		// 単純な区画とし、折りたたみパネルにはしない。
+		var markerSection = selectedPin
+			? el(
+				'div',
+				{ className: 'image-pin-block-editor__modal-marker-section' },
+				el( 'p', { className: 'image-pin-block-editor__marker-heading' }, __( 'Marker image', 'image-pin-block' ) ),
+				selectedPin.markerImageUrl
+					? el(
+						'div',
+						{ className: 'image-pin-block-editor__marker-preview' },
+						el( 'img', { src: selectedPin.markerImageUrl, alt: '' } ),
+						el(
+							MediaUploadCheck,
+							{},
+							el( MediaUpload, {
+								onSelect: handleSelectMarkerImage,
+								value: selectedPin.markerImageId,
+								allowedTypes: [ 'image/png', 'image/jpeg' ],
+								render: function( obj ) {
+									return el(
+										Button,
+										{ variant: 'secondary', onClick: obj.open },
+										__( 'Change marker image', 'image-pin-block' )
+									);
+								}
+							} )
+						),
+						el(
+							Button,
+							{ variant: 'tertiary', isDestructive: true, onClick: clearMarkerImage },
+							__( 'Remove marker image', 'image-pin-block' )
+						)
+					)
+					: el(
+						MediaUploadCheck,
+						{},
+						el( MediaUpload, {
+							onSelect: handleSelectMarkerImage,
+							allowedTypes: [ 'image/png', 'image/jpeg' ],
+							render: function( obj ) {
+								return el(
+									Button,
+									{ variant: 'secondary', onClick: obj.open },
+									__( 'Select marker image', 'image-pin-block' )
+								);
+							}
+						} )
+					),
+				selectedPin.markerImageUrl
+					// key にピンIDを含め、ピンを切り替えたときにClampedNumberControlの
+					// 下書き状態(内部useState)を新しい値でリセットする(ClampedNumberControl
+					// は制御コンポーネントではないため、keyを変えず値だけ変えても表示が
+					// 追従しない)。
+					? el( ClampedNumberControl, {
+						key: selectedPinId,
+						label: __( 'Marker image scale (%)', 'image-pin-block' ),
+						value: selectedPin.markerScale || DEFAULT_MARKER_SCALE,
+						min: MARKER_SCALE_MIN,
+						max: MARKER_SCALE_MAX,
+						defaultValue: DEFAULT_MARKER_SCALE,
+						onCommit: function( n ) { updateSelectedPin( 'markerScale', n ); }
+					} )
+					: null
+			)
 			: null;
 
 		// 編集用モーダル(v0.2.0)。「画像として保存」はヘッダーに場所だけ用意し、
@@ -1469,7 +1463,11 @@
 						disabled: true
 					}, __( 'Save as image', 'image-pin-block' ) )
 				},
-				blockSettingsPanel
+				blockSettingsPanel,
+				modalMainRow,
+				pinTabsRow,
+				pinTabActionsRow,
+				markerSection
 			)
 			: null;
 
@@ -1482,33 +1480,15 @@
 				'div',
 				{
 					ref: wrapperRef,
-					className: 'image-pin-block-editor__wrapper',
-					onClick: handleWrapperClick
+					className: 'image-pin-block-editor__wrapper image-pin-block-editor__wrapper--static',
+					onDoubleClick: handleCanvasDoubleClick
 				},
 				el( 'img', {
 					className: 'image-pin-block-editor__image',
 					src: attributes.imageUrl,
 					alt: ''
 				} ),
-				pinElements,
-				menuElement,
-				canvasPopoverElement
-			),
-			el(
-				MediaUploadCheck,
-				{},
-				el( MediaUpload, {
-					onSelect: handleSelectImage,
-					value: attributes.imageId,
-					allowedTypes: [ 'image/png', 'image/jpeg' ],
-					render: function( obj ) {
-						return el(
-							Button,
-							{ variant: 'secondary', onClick: obj.open },
-							__( 'Change image', 'image-pin-block' )
-						);
-					}
-				} )
+				pinElements
 			)
 		);
 	}

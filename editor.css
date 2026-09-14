@@ -2,6 +2,20 @@
 	position: relative;
 	display: inline-block;
 	max-width: 100%;
+}
+
+/* ブロック自身のキャンバス(v0.2.0より表示専用)。クリックでの追加・選択・ドラッグは
+   すべてモーダル内(.image-pin-block-editor__modal-canvas)に移した。 */
+.image-pin-block-editor__wrapper--static {
+	cursor: zoom-in;
+}
+
+.image-pin-block-editor__wrapper--static .image-pin-block-editor__pin {
+	cursor: default;
+}
+
+/* モーダル内の画像編集エリア(v0.2.0)。クリックで新規ピンを追加できることを示す。 */
+.image-pin-block-editor__modal-canvas {
 	cursor: crosshair;
 }
 
@@ -67,38 +81,10 @@
 	pointer-events: none;
 }
 
-/* マーカー画像 + リサイズハンドルの位置決め用コンテナ。画像の実サイズにぴったり合わせ、
-   ハンドルはその右下角を基準に position: absolute で重ねる。 */
+/* マーカー画像の位置決め用コンテナ。画像の実サイズにぴったり合わせる。 */
 .image-pin-block-editor__marker-wrap {
 	position: relative;
 	display: inline-block;
-}
-
-/* 選択中の画像マーカーの右下に表示するリサイズハンドル。大きさは表示幅に応じて
-   JS側(buildPinContent の MARKER_RESIZE_HANDLE_* 定数)がインラインstyleで指定する。 */
-.image-pin-block-editor__marker-resize-handle {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	transform: translate(50%, 50%);
-	background: #1e88e5;
-	border: 2px solid #fff;
-	border-radius: 50%;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-	cursor: nwse-resize;
-	touch-action: none;
-}
-
-.image-pin-block-editor__menu {
-	position: absolute;
-	transform: translate(-50%, 8px);
-	background: #fff;
-	border: 1px solid #ddd;
-	border-radius: 4px;
-	padding: 4px;
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-	z-index: 20;
-	white-space: nowrap;
 }
 
 .image-pin-block-editor__marker-heading {
@@ -154,19 +140,13 @@
 	background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
 
-/* 「ポップオーバー」パネル内の案内文(実際のプレビューはキャンバス側の
-   .image-pin-block-editor__canvas-popover に表示される)。 */
-.image-pin-block-editor__popover-preview-hint {
-	font-style: italic;
-	color: #757575;
-}
-
-/* 選択中のピンのポップオーバーを、実画像の上に重ねて表示する(CanvasPopoverPreview関数)。
-   left/top はピンと同じ%座標、transform でピンの反対側にずらして表示する
-   (はみ出しにくい側を JS側で計算済み)。実際の .image-pin-block__popover とは
-   別要素・別クラスだが、背景不透明度・文字色・縁取りの計算ロジックは
-   image-pin-block.php のレンダリングと同じ考え方(色+不透明度の合成、太さ'none'なら
-   縁取りを一切出力しない)を用いている。render_callback の出力には一切影響しない。 */
+/* 選択中のピンのポップオーバーを、モーダル内の画像編集エリアの実画像の上に重ねて
+   表示する(CanvasPopoverPreview関数)。left/top はピンと同じ%座標、transform で
+   ピンの反対側にずらして表示する(はみ出しにくい側を JS側で計算済み)。実際の
+   .image-pin-block__popover とは別要素・別クラスだが、背景不透明度・文字色・縁取りの
+   計算ロジックは image-pin-block.php のレンダリングと同じ考え方(色+不透明度の合成、
+   太さ'none'なら縁取りを一切出力しない)を用いている。render_callback の出力には
+   一切影響しない。 */
 .image-pin-block-editor__canvas-popover {
 	position: absolute;
 	max-width: 260px;
@@ -224,4 +204,66 @@
 	.image-pin-block-editor__modal-settings-grid {
 		grid-template-columns: 1fr;
 	}
+}
+
+/* 「画像＋右の基本設定」の行(v0.2.0)。左(画像編集エリア)を優先して広く取り、
+   右(選択中のピンの基本設定)は固定幅のコンパクトな列にする。 */
+.image-pin-block-editor__modal-main-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 300px;
+	gap: 24px;
+	margin-top: 20px;
+	align-items: start;
+}
+
+@media ( max-width: 782px ) {
+	.image-pin-block-editor__modal-main-row {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* 画像編集エリアをスクロール可能にする(ズームで画像が拡大されると、
+   コンテナからはみ出す分をスクロールで見られるようにするため)。 */
+.image-pin-block-editor__modal-image-scroll {
+	max-height: 60vh;
+	overflow: auto;
+	border: 1px solid #e0e0e0;
+	background: #f0f0f0;
+}
+
+.image-pin-block-editor__modal-basic-settings {
+	padding: 4px 0;
+}
+
+/* 「ピン一覧」: ピンをタブ状に横並びで表示する。 */
+.image-pin-block-editor__pin-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-top: 20px;
+	padding-top: 16px;
+	border-top: 1px solid #e0e0e0;
+}
+
+.image-pin-block-editor__pin-tab {
+	max-width: 160px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.image-pin-block-editor__pin-tab-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.image-pin-block-editor__modal-marker-section {
+	margin-top: 16px;
+	padding-top: 16px;
+	border-top: 1px solid #e0e0e0;
+}
+
+.image-pin-block-editor__modal-marker-section .image-pin-block-editor__marker-heading {
+	margin-top: 0;
 }
