@@ -1146,6 +1146,16 @@
 		var modalZoom = modalZoomState[ 0 ];
 		var setModalZoom = modalZoomState[ 1 ];
 
+		// modalZoomRef: Pinch Zoom用にmodalZoomの最新値をrefでも保持する(260915〜)。
+		// Pinch追跡用のuseEffect(下記)はpointerイベントの度に再登録したくないため
+		// 依存配列にmodalZoomを含めていない。そのuseEffect内のネイティブイベント
+		// リスナーから「Pinch開始時点のZoom値」を常に最新の状態で読み出すために使う
+		// (通常のrender内で直接modalZoomを読む分にはこのrefは不要)。
+		var modalZoomRef = useRef( modalZoom );
+		useEffect( function() {
+			modalZoomRef.current = modalZoom;
+		}, [ modalZoom ] );
+
 		// Pan位置(px、Preview viewportの中心を基準)。保存属性ではなく編集UI限定の
 		// ローカル状態。Pan操作中もsetAttributesは一切呼ばない(記事データではないため)。
 		var modalPanState = useState( { x: 0, y: 0 } );
@@ -1307,6 +1317,21 @@
 		// 誤表示を防ぐため、handleViewportDoubleClick側でこの矩形内かどうかを判定する
 		// (Popover自体の表示・操作設計は変更しない)。
 		var openPopoverElRef = useRef( null );
+		// activePointerIdsRef: Preview viewport内で現在押下中のtouch pointerを
+		// { id, x, y } の配列で保持する(260915〜、Pinch Zoom用)。capture-phaseの
+		// pointerdown/pointermove/pointerup/pointercancelリスナー(下記useEffect)だけが
+		// 読み書きする。Pin/Marker/Label/Panの各pointerdownハンドラは、この配列の長さで
+		// 「自分が1本目の指か、2本目以降(Pinchの一部)か」を判定する。
+		var activePointerIdsRef = useRef( [] );
+		// pinchGestureRef: Pinch gesture進行中だけ { startDistance, startZoom } を保持する
+		// (260915〜)。2本のpointerが入っている間だけ非null。
+		var pinchGestureRef = useRef( null );
+		// cancelActiveSingleGestureRef: 現在進行中の1本指gesture(Pin drag/Marker resize/
+		// Label drag/Pan)を、クリック/selection/Popover等の確定処理を一切行わずに
+		// 中断するための関数を保持する(260915〜)。2本目のpointerが入った瞬間に、
+		// Pinch側からこれを呼び出して1本指gestureを打ち切る(各gestureの開始時に
+		// 自分自身をここへ登録し、自然に終了する時にここをクリアする)。
+		var cancelActiveSingleGestureRef = useRef( null );
 
 		// Preview viewport自体の実サイズ(px)。利用可能な領域(host)へ、
 		// MODAL_PREVIEW_ASPECT_RATIO(16:9)を最大containしたサイズ。
@@ -1479,6 +1504,119 @@
 			};
 		}, [ isModalOpen ] );
 
+		// Preview viewport上の2本指Pinch操作で、既存のZoom(modalZoom)を連続倍率で
+		// 操作する(260915〜)。Pinch専用のZoom stateは持たず、wheel Zoomと全く同じ
+		// modalZoomを変更するだけなので、Zoom UI・Pan再clamp・pendingMenuクローズは
+		// 既存のuseEffect([modalZoom, ...])がそのまま処理する。今回はPinch中心の
+		// 位置に合わせたPan補正は行わない(distance比をZoomへ反映するだけ)。
+		// capture-phase(第3引数 true)でPreview viewport自体に登録することで、
+		// Pin/Marker/Label等の個々のpointerdownがstopPropagation()していても、
+		// ここでは必ず先に(1本目・2本目問わず)全pointerを捕捉できる。
+		// touch-action: none が既にこのviewportへ設定済みのため(editor.css)、
+		// ブラウザ既定のpinch zoom/scroll/gesture navigationは元々発生しない。
+		useEffect( function() {
+			if ( ! isModalOpen ) {
+				return;
+			}
+			var viewportEl = modalPreviewViewportRef.current;
+			if ( ! viewportEl ) {
+				return;
+			}
+
+			function findEntry( pointerId ) {
+				var ids = activePointerIdsRef.current;
+				for ( var i = 0; i < ids.length; i++ ) {
+					if ( ids[ i ].id === pointerId ) {
+						return ids[ i ];
+					}
+				}
+				return null;
+			}
+
+			function distanceBetween( a, b ) {
+				var dx = a.x - b.x;
+				var dy = a.y - b.y;
+				return Math.sqrt( dx * dx + dy * dy );
+			}
+
+			function handlePointerDownCapture( evt ) {
+				// マウス/ペンでの同時複数pointerは通常発生しないため、touchだけを対象にする
+				// (Pin drag等、既存の1本指操作をマウス/ペンで一切変えないため)。
+				if ( evt.pointerType !== 'touch' ) {
+					return;
+				}
+				if ( ! findEntry( evt.pointerId ) ) {
+					activePointerIdsRef.current.push( { id: evt.pointerId, x: evt.clientX, y: evt.clientY } );
+				}
+
+				var ids = activePointerIdsRef.current;
+				if ( ids.length === 2 && ! pinchGestureRef.current ) {
+					// 2本目のtouch pointerが入った時点でPinch開始。進行中の1本指gesture
+					// (Pin drag/Marker resize/Label drag/Pan)があれば、クリック等の確定処理
+					// を一切行わせずに打ち切る(「2本指になったらPinch優先、1本目のgestureを
+					// clickやdragとして確定させない」という仕様のため)。
+					if ( cancelActiveSingleGestureRef.current ) {
+						cancelActiveSingleGestureRef.current();
+						cancelActiveSingleGestureRef.current = null;
+					}
+					var startDistance = distanceBetween( ids[ 0 ], ids[ 1 ] );
+					if ( startDistance > 0 ) {
+						pinchGestureRef.current = { startDistance: startDistance, startZoom: modalZoomRef.current };
+					}
+				}
+			}
+
+			function handlePointerMoveCapture( evt ) {
+				var entry = findEntry( evt.pointerId );
+				if ( ! entry ) {
+					return;
+				}
+				entry.x = evt.clientX;
+				entry.y = evt.clientY;
+
+				var ids = activePointerIdsRef.current;
+				if ( ! pinchGestureRef.current || ids.length < 2 ) {
+					return;
+				}
+				evt.preventDefault();
+				var currentDistance = distanceBetween( ids[ 0 ], ids[ 1 ] );
+				if ( currentDistance <= 0 || pinchGestureRef.current.startDistance <= 0 ) {
+					return;
+				}
+				var newZoom = pinchGestureRef.current.startZoom * ( currentDistance / pinchGestureRef.current.startDistance );
+				setModalZoom( clampToRange( newZoom, MODAL_ZOOM_MIN, MODAL_ZOOM_MAX ) );
+			}
+
+			function handlePointerEndCapture( evt ) {
+				var ids = activePointerIdsRef.current;
+				for ( var i = 0; i < ids.length; i++ ) {
+					if ( ids[ i ].id === evt.pointerId ) {
+						ids.splice( i, 1 );
+						break;
+					}
+				}
+				// pointerが2本未満に戻ったらPinch gesture終了。残った1本(あれば)は、
+				// 新たなpointerdownが発生するまで何のgestureも開始しない(突然Pin drag
+				// 等が始まらないようにするため。各gestureはpointerdown契機でのみ始まる)。
+				if ( activePointerIdsRef.current.length < 2 ) {
+					pinchGestureRef.current = null;
+				}
+			}
+
+			viewportEl.addEventListener( 'pointerdown', handlePointerDownCapture, true );
+			viewportEl.addEventListener( 'pointermove', handlePointerMoveCapture, true );
+			viewportEl.addEventListener( 'pointerup', handlePointerEndCapture, true );
+			viewportEl.addEventListener( 'pointercancel', handlePointerEndCapture, true );
+			return function() {
+				viewportEl.removeEventListener( 'pointerdown', handlePointerDownCapture, true );
+				viewportEl.removeEventListener( 'pointermove', handlePointerMoveCapture, true );
+				viewportEl.removeEventListener( 'pointerup', handlePointerEndCapture, true );
+				viewportEl.removeEventListener( 'pointercancel', handlePointerEndCapture, true );
+				activePointerIdsRef.current = [];
+				pinchGestureRef.current = null;
+			};
+		}, [ isModalOpen ] );
+
 		// 「ここにピンを追加」確認メニュー表示中、メニュー自身以外の場所がpointerdown
 		// されたら閉じる(260920〜。対象: 画像の別の空き部分・Pin・Marker・Label・
 		// Previewの別位置・右側設定欄・＋ボタン・その他Editor UI)。selectedPinIdには
@@ -1629,6 +1767,12 @@
 		function handleLabelDragPointerDown( pinId, evt ) {
 			evt.stopPropagation();
 			evt.preventDefault();
+			// 既に別のtouch pointerが入っている(=このpointerdownは2本目以降で、
+			// Pinch Zoomの一部)場合、Label drag/選択/Popover toggleは一切開始しない
+			// (260915〜)。
+			if ( activePointerIdsRef.current.length >= 2 ) {
+				return;
+			}
 			// Labelクリックも、そのLabelが属するPinをクリックしたのと同じ扱いにする
 			// (260920〜。非selectedなPinのLabelは選択のみ、既にselectedなPinのLabelは
 			// 再クリックでPopover toggle)。Label drag自体(labelPositionの更新)は
@@ -1663,6 +1807,19 @@
 			if ( labelEl.setPointerCapture ) {
 				labelEl.setPointerCapture( pointerId );
 			}
+
+			// Pinchへ移行した場合、selection/click/Popover等の確定処理を一切行わずに
+			// このgestureを打ち切るための関数(260915〜)。handleModalPinPointerDownと
+			// 同じ考え方。
+			function cancelForPinch() {
+				if ( labelEl.hasPointerCapture && labelEl.hasPointerCapture( pointerId ) ) {
+					labelEl.releasePointerCapture( pointerId );
+				}
+				labelEl.removeEventListener( 'pointermove', handleMove );
+				labelEl.removeEventListener( 'pointerup', endDrag );
+				labelEl.removeEventListener( 'pointercancel', endDrag );
+			}
+			cancelActiveSingleGestureRef.current = cancelForPinch;
 
 			// Pointer位置とPin/Marker中心からatan2で角度を求め、0以上1未満へ正規化する
 			// だけの単純な計算(side/corner判定・最近傍点探索は不要)。atan2は
@@ -1716,6 +1873,9 @@
 				labelEl.removeEventListener( 'pointermove', handleMove );
 				labelEl.removeEventListener( 'pointerup', endDrag );
 				labelEl.removeEventListener( 'pointercancel', endDrag );
+				if ( cancelActiveSingleGestureRef.current === cancelForPinch ) {
+					cancelActiveSingleGestureRef.current = null;
+				}
 
 				// Pin/Markerと同じtoggleルール(handleModalPinPointerDown参照)。
 				if ( ! movedForPopover && endEvt && endEvt.type !== 'pointercancel' ) {
@@ -1865,6 +2025,12 @@
 			// ブラウザ既定の画像ドラッグ(ゴースト表示)を防ぐ。既存のピンドラッグ
 			// (handleModalPinPointerDown)と同じ考え方。
 			evt.preventDefault();
+			// 既に別のtouch pointerが入っている(=このpointerdownは2本目以降で、
+			// Pinch Zoomの一部)場合、Panは開始しない(260915〜)。Pinch側
+			// (activePointerIdsRefを更新するcapture-phaseリスナー)が処理する。
+			if ( activePointerIdsRef.current.length >= 2 ) {
+				return;
+			}
 			var viewportEl = evt.currentTarget;
 			var pointerId = evt.pointerId;
 			var startClientX = evt.clientX;
@@ -1875,6 +2041,20 @@
 			if ( viewportEl.setPointerCapture ) {
 				viewportEl.setPointerCapture( pointerId );
 			}
+
+			// Pinchへ移行した場合、click/selection等の確定処理を一切行わずにこの
+			// gestureを打ち切るための関数(260915〜)。2本目のpointerが入った瞬間に
+			// Pinch側から呼ばれる。呼ばれた後はリスナーが無くなるためendDragは
+			// 発火しない(自然終了時の後片付けと重複させる必要はない)。
+			function cancelForPinch() {
+				if ( viewportEl.hasPointerCapture && viewportEl.hasPointerCapture( pointerId ) ) {
+					viewportEl.releasePointerCapture( pointerId );
+				}
+				viewportEl.removeEventListener( 'pointermove', handleMove );
+				viewportEl.removeEventListener( 'pointerup', endDrag );
+				viewportEl.removeEventListener( 'pointercancel', endDrag );
+			}
+			cancelActiveSingleGestureRef.current = cancelForPinch;
 
 			function handleMove( moveEvt ) {
 				if ( moveEvt.pointerId !== pointerId ) {
@@ -1903,6 +2083,9 @@
 				viewportEl.removeEventListener( 'pointermove', handleMove );
 				viewportEl.removeEventListener( 'pointerup', endDrag );
 				viewportEl.removeEventListener( 'pointercancel', endDrag );
+				if ( cancelActiveSingleGestureRef.current === cancelForPinch ) {
+					cancelActiveSingleGestureRef.current = null;
+				}
 
 				// pointercancelは、ブラウザがジェスチャーを中断した場合(コンテキスト
 				// メニュー表示・マルチタッチ等)に発火し、座標が信頼できないため
@@ -2011,6 +2194,13 @@
 		function handleModalPinPointerDown( pinId, evt ) {
 			evt.stopPropagation();
 			evt.preventDefault();
+			// 既に別のtouch pointerが入っている(=このpointerdownは2本目以降で、
+			// Pinch Zoomの一部)場合、Pin drag/選択/Popover toggleは一切開始しない
+			// (260915〜)。1本目の指が既にこのPinを押していた場合の中断は、Pinch側
+			// (cancelActiveSingleGestureRef経由)が別途処理する。
+			if ( activePointerIdsRef.current.length >= 2 ) {
+				return;
+			}
 			// このPin/Markerが、この操作が始まる前から既にselected状態だったかどうか
 			// (260920〜)。Popover toggleの可否はこれで決める(下記endDrag参照。
 			// setSelectedPinIdを呼んだ後でも、このクロージャ内のselectedPinId自体は
@@ -2040,6 +2230,19 @@
 			if ( pinEl.setPointerCapture ) {
 				pinEl.setPointerCapture( pointerId );
 			}
+
+			// Pinchへ移行した場合、selection/click/Popover等の確定処理を一切行わずに
+			// このgestureを打ち切るための関数(260915〜)。2本目のpointerが入った瞬間に
+			// Pinch側から呼ばれる。呼ばれた後はリスナーが無くなるためendDragは発火しない。
+			function cancelForPinch() {
+				if ( pinEl.hasPointerCapture && pinEl.hasPointerCapture( pointerId ) ) {
+					pinEl.releasePointerCapture( pointerId );
+				}
+				pinEl.removeEventListener( 'pointermove', handleMove );
+				pinEl.removeEventListener( 'pointerup', endDrag );
+				pinEl.removeEventListener( 'pointercancel', endDrag );
+			}
+			cancelActiveSingleGestureRef.current = cancelForPinch;
 
 			// マーカー画像を持つピンは、その外形が本体画像の内側に収まるよう移動範囲を
 			// 制限する(丸マーカーは対象外。詳細は docs/DATA_LAYOUT.md の
@@ -2119,6 +2322,9 @@
 				pinEl.removeEventListener( 'pointermove', handleMove );
 				pinEl.removeEventListener( 'pointerup', endDrag );
 				pinEl.removeEventListener( 'pointercancel', endDrag );
+				if ( cancelActiveSingleGestureRef.current === cancelForPinch ) {
+					cancelActiveSingleGestureRef.current = null;
+				}
 				setSelectedPinId( pinId );
 
 				// ドラッグ(movedForPopover)でもpointercancel(座標が信頼できない中断)でも
@@ -2156,6 +2362,11 @@
 		// containment(はみ出し防止)の測定自体はv0.1.x系から変更していない。
 		function handleMarkerResizePointerDown( pinId, evt ) {
 			evt.preventDefault();
+			// 既に別のtouch pointerが入っている(=このpointerdownは2本目以降で、
+			// Pinch Zoomの一部)場合、Marker resizeは開始しない(260915〜)。
+			if ( activePointerIdsRef.current.length >= 2 ) {
+				return;
+			}
 			var pin = pins.filter( function( p ) { return p.id === pinId; } )[ 0 ];
 			var naturalW = markerNaturalWidths[ pinId ] || 0;
 			var wrapperEl = modalWrapperRef.current;
@@ -2212,6 +2423,18 @@
 				handleEl.setPointerCapture( pointerId );
 			}
 
+			// Pinchへ移行した場合、resize確定処理を行わずにこのgestureを打ち切るための
+			// 関数(260915〜)。handleModalPinPointerDownと同じ考え方。
+			function cancelForPinch() {
+				if ( handleEl.hasPointerCapture && handleEl.hasPointerCapture( pointerId ) ) {
+					handleEl.releasePointerCapture( pointerId );
+				}
+				handleEl.removeEventListener( 'pointermove', handleMove );
+				handleEl.removeEventListener( 'pointerup', endDrag );
+				handleEl.removeEventListener( 'pointercancel', endDrag );
+			}
+			cancelActiveSingleGestureRef.current = cancelForPinch;
+
 			function handleMove( moveEvt ) {
 				if ( moveEvt.pointerId !== pointerId ) {
 					return;
@@ -2245,6 +2468,9 @@
 				handleEl.removeEventListener( 'pointermove', handleMove );
 				handleEl.removeEventListener( 'pointerup', endDrag );
 				handleEl.removeEventListener( 'pointercancel', endDrag );
+				if ( cancelActiveSingleGestureRef.current === cancelForPinch ) {
+					cancelActiveSingleGestureRef.current = null;
+				}
 			}
 
 			handleEl.addEventListener( 'pointermove', handleMove );
