@@ -486,7 +486,8 @@
 							display.onMarkerResizePointerDown( pin.id, evt );
 						}
 					},
-					onClick: function( evt ) { evt.stopPropagation(); }
+					onClick: function( evt ) { evt.stopPropagation(); },
+					onDoubleClick: function( evt ) { evt.stopPropagation(); }
 				} );
 			}
 
@@ -1149,6 +1150,16 @@
 		var pendingMenu = pendingMenuState[ 0 ];
 		var setPendingMenu = pendingMenuState[ 1 ];
 
+		// Popoverの開閉状態(260919〜)。選択状態(selectedPinId)とは独立した別概念として
+		// 扱う(「Pinが選択されている」= 「Popoverが開いている」ではない)。null のとき
+		// 非表示。値が入っているときは、そのIDのPinのPopoverを表示する
+		// (modalPopoverElement参照)。Pin/Marker本体をクリック確定(ドラッグではない)した
+		// 時点でトグルする(handleModalPinPointerDown参照)。Fullscreen Editorを開いた
+		// 直後・Pin削除後の自動選択後は、いずれもPopoverを自動で開かない(常にnullのまま)。
+		var openPopoverPinIdState = useState( null );
+		var openPopoverPinId = openPopoverPinIdState[ 0 ];
+		var setOpenPopoverPinId = openPopoverPinIdState[ 1 ];
+
 		// 右側「ブロック全体の設定」のDrawer(狭い画面用)の開閉状態。
 		var isSettingsDrawerOpenState = useState( false );
 		var isSettingsDrawerOpen = isSettingsDrawerOpenState[ 0 ];
@@ -1160,6 +1171,7 @@
 			setModalPan( { x: 0, y: 0 } );
 			setIsSettingsDrawerOpen( false );
 			setPendingMenu( null );
+			setOpenPopoverPinId( null );
 		}
 
 		var wrapperRef = useRef( null );
@@ -1268,6 +1280,11 @@
 		// と一致している必要があるため。詳細はdocs/DATA_LAYOUT.md参照)。
 		var modalPreviewHostRef = useRef( null );
 		var modalWrapperRef = useRef( null );
+		// modalPreviewViewportRef: Preview viewport自体(16:9固定の窓)。マウスホイールに
+		// よるZoom操作を、passiveではないaddEventListenerで登録するために使う
+		// (React合成イベントのonWheelはpassive化されることがあり、preventDefault()が
+		// 効かない場合があるため)。
+		var modalPreviewViewportRef = useRef( null );
 
 		// Preview viewport自体の実サイズ(px)。利用可能な領域(host)へ、
 		// MODAL_PREVIEW_ASPECT_RATIO(16:9)を最大containしたサイズ。
@@ -1401,6 +1418,44 @@
 		useEffect( function() {
 			setPendingMenu( null );
 		}, [ modalZoom, modalPreviewSize.width, modalPreviewSize.height ] );
+
+		// Preview viewport上のマウスホイールで、既存のZoom(modalZoom)を5%刻みで操作する
+		// (260919〜)。カーソル位置を中心にした補正は行わない(単純にZoom値を更新する
+		// だけ)。React合成イベントのonWheelは環境によりpassive指定されることがあり
+		// preventDefault()が効かない場合があるため、素のaddEventListenerで
+		// {passive:false}を明示して登録する(既存のPointerイベント処理と同じ、素の
+		// DOM APIを使うパターンに揃えている)。Preview viewport上でのwheelだけを対象にし、
+		// document/window全体のscrollには一切手を加えない。Zoom値が実際に変わった場合、
+		// 既存のuseEffect([modalZoom, ...])がPan位置の再clamp・pendingMenuのクローズを
+		// 自動的に行う(このためだけの専用処理は不要)。
+		useEffect( function() {
+			if ( ! isModalOpen ) {
+				return;
+			}
+			var viewportEl = modalPreviewViewportRef.current;
+			if ( ! viewportEl ) {
+				return;
+			}
+
+			function handleWheel( evt ) {
+				// 横方向のみのホイール/トラックパッド操作ではZoomしない。
+				if ( ! evt.deltaY ) {
+					return;
+				}
+				evt.preventDefault();
+				// deltaYの大きさ(マウス/トラックパッドで大きく異なりうる)を倍率には
+				// 使わず、1回のwheelイベントにつき常に5%だけ動かす(暴走防止)。
+				var step = ( evt.deltaY < 0 ) ? 5 : -5;
+				setModalZoom( function( prev ) {
+					return clampToRange( prev + step, MODAL_ZOOM_MIN, MODAL_ZOOM_MAX );
+				} );
+			}
+
+			viewportEl.addEventListener( 'wheel', handleWheel, { passive: false } );
+			return function() {
+				viewportEl.removeEventListener( 'wheel', handleWheel );
+			};
+		}, [ isModalOpen ] );
 
 		// マーカー画像の実寸(naturalWidth、px)をピンIDごとにキャッシュする。
 		// <img> の読み込み完了(onLoad)時に記録し、buildPinVisualOnly() が上限クランプの
@@ -1647,6 +1702,17 @@
 			}
 		}, [ pins, selectedPinId ] );
 
+		// openPopoverPinIdについても同じ防御(Undo等で該当ピンが消えた場合にのみ閉じる)。
+		useEffect( function() {
+			if ( openPopoverPinId === null ) {
+				return;
+			}
+			var existsForPopover = pins.some( function( p ) { return p.id === openPopoverPinId; } );
+			if ( ! existsForPopover ) {
+				setOpenPopoverPinId( null );
+			}
+		}, [ pins, openPopoverPinId ] );
+
 		function updatePins( nextPins ) {
 			setAttributes( { pins: nextPins } );
 		}
@@ -1703,15 +1769,12 @@
 		// pointerdown。ピン自体のpointerdownは stopPropagation されているため、
 		// ここに来るのは常に「ピン操作ではない」背景操作。
 		//
-		// クリック(「ここにピンを追加」の表示)とドラッグ(Pan)は、pointer移動距離で
-		// 区別する(PAN_CLICK_THRESHOLD_PX未満ならクリック、以上ならPan。手ブレでPan
-		// 扱いにならないよう4〜6px程度を目安にしている)。クリックの時点ではピンを
-		// 作成しない(pendingMenuを表示するだけ)。実際に画像へsetAttributesするのは
-		// 「ここにピンを追加」ボタン(addPinFromMenu)を押した時点のみ。
-		//
-		// クリックと判定された場合でも、実際の画像の矩形(modalWrapperRef)の外
-		// (黒いletterbox部分)であれば何もしない(isPointInsideRect参照。0〜100%への
-		// クランプだけに頼ると、画像外のクリックが画像端へのピン追加に化けてしまう)。
+		// クリック(選択解除)とドラッグ(Pan)は、pointer移動距離で区別する
+		// (PAN_CLICK_THRESHOLD_PX未満ならクリック、以上ならPan。手ブレでPan扱いに
+		// ならないよう4〜6px程度を目安にしている)。260919〜: 単クリックでは
+		// Pin追加候補を出さず、選択解除・Popoverを閉じるだけの操作にした
+		// (「ここにピンを追加」の表示はhandleViewportDoubleClick=ダブルクリックへ移した。
+		// 既存のpendingMenu/addPinFromMenu/createPinAtの仕組み自体は変更していない)。
 		//
 		// Zoom > 100% で画像がPreviewより大きい軸は、letterbox部分からドラッグを
 		// 開始してもPanできる(黒い余白も含めて「画面」全体をドラッグする感覚のため)。
@@ -1766,30 +1829,48 @@
 				if ( moved || ! endEvt || endEvt.type === 'pointercancel' ) {
 					return;
 				}
-				var wrapperEl = modalWrapperRef.current;
-				if ( ! wrapperEl ) {
-					return;
-				}
-				var imageRect = wrapperEl.getBoundingClientRect();
-				if ( ! isPointInsideRect( endEvt.clientX, endEvt.clientY, imageRect ) ) {
-					return;
-				}
-				var point = percentFromClientPoint( endEvt.clientX, endEvt.clientY, imageRect );
-				// メニュー自体の表示位置はviewport基準のpx(Zoom/Panのtransformの外側に
-				// 描画するため、Zoom/Panで一緒に拡大・移動しない)。
-				var viewportRect = viewportEl.getBoundingClientRect();
+				// 単クリック確定: 選択解除・Popoverを閉じるだけ(Pin追加候補は出さない。
+				// letterbox・実画像どちらのクリックでも同じ扱いでよい。選択解除自体は
+				// 画像の矩形内外を問わず安全な操作のため、isPointInsideRectでの絞り込みは
+				// 行わない)。
 				setSelectedPinId( null );
-				setPendingMenu( {
-					x: point.x,
-					y: point.y,
-					left: endEvt.clientX - viewportRect.left,
-					top: endEvt.clientY - viewportRect.top
-				} );
+				setOpenPopoverPinId( null );
 			}
 
 			viewportEl.addEventListener( 'pointermove', handleMove );
 			viewportEl.addEventListener( 'pointerup', endDrag );
 			viewportEl.addEventListener( 'pointercancel', endDrag );
+		}
+
+		// 画像の空いている部分(実画像の矩形内)をダブルクリックした場合だけ、その位置へ
+		// 「ここにピンを追加」確認メニューを表示する(即座にPinを作成するのではなく、
+		// 既存のpendingMenu/addPinFromMenu/createPinAtの確認フローをそのまま使う)。
+		// Pin・Marker・Label・Popover・リサイズハンドル・pendingMenu自身は、それぞれ
+		// onDoubleClickでstopPropagationしているため、これらをダブルクリックしても
+		// ここには到達しない(背景への誤伝播を防ぐ)。letterbox部分(実画像の矩形外)の
+		// ダブルクリックも無視する。
+		function handleViewportDoubleClick( evt ) {
+			var wrapperEl = modalWrapperRef.current;
+			var viewportEl = evt.currentTarget;
+			if ( ! wrapperEl ) {
+				return;
+			}
+			var imageRect = wrapperEl.getBoundingClientRect();
+			if ( ! isPointInsideRect( evt.clientX, evt.clientY, imageRect ) ) {
+				return;
+			}
+			var point = percentFromClientPoint( evt.clientX, evt.clientY, imageRect );
+			// メニュー自体の表示位置はviewport基準のpx(Zoom/Panのtransformの外側に
+			// 描画するため、Zoom/Panで一緒に拡大・移動しない)。
+			var viewportRect = viewportEl.getBoundingClientRect();
+			setSelectedPinId( null );
+			setOpenPopoverPinId( null );
+			setPendingMenu( {
+				x: point.x,
+				y: point.y,
+				left: evt.clientX - viewportRect.left,
+				top: evt.clientY - viewportRect.top
+			} );
 		}
 
 		// 「ここにピンを追加」ボタン。pendingMenuのx/yで新規ピンを作成し、選択状態にして
@@ -1831,7 +1912,10 @@
 		// モーダル内の画像編集エリア(modalWrapperRef)に置き換えた。ズーム(modalZoom)は
 		// transform: scale() で見た目だけを拡大縮小しており、getBoundingClientRect() は
 		// 常に画面上の実際の見た目のサイズ・位置を返すため、ズーム倍率に関わらずこの関数は
-		// 変更なしで正しく動作する。
+		// 変更なしで正しく動作する。260919〜: ドラッグではなくクリックとして完了した
+		// 場合(movedForPopover参照)に限り、そのピンのPopoverをトグルする(pointerdown
+		// 自体ではトグルしない。ドラッグのたびにPopoverが開閉すると邪魔になるため)。
+		// 丸マーカー・画像マーカーどちらもこの同じ関数で処理するため、操作体系は共通。
 		function handleModalPinPointerDown( pinId, evt ) {
 			evt.stopPropagation();
 			evt.preventDefault();
@@ -1845,6 +1929,13 @@
 
 			var pointerId = evt.pointerId;
 			var pinEl = evt.currentTarget;
+			var startClientX = evt.clientX;
+			var startClientY = evt.clientY;
+			// クリック確定(ドラッグではない)時のみPopoverをtoggleするための判定
+			// (260919〜)。ピン移動自体は既存どおり1px単位で追従させたまま、Popover
+			// toggleの可否だけをPAN_CLICK_THRESHOLD_PXベースで別途判定する
+			// (handleViewportPointerDownのmoved判定と同じ考え方)。
+			var movedForPopover = false;
 
 			// setPointerCapture で以降の pointermove/pointerup をこのピン要素に固定する。
 			// これが無いと、ドラッグ中にポインタが画像側へ出た瞬間の click が
@@ -1883,6 +1974,14 @@
 					return;
 				}
 				moveEvt.stopPropagation();
+
+				if ( ! movedForPopover ) {
+					var dx0 = moveEvt.clientX - startClientX;
+					var dy0 = moveEvt.clientY - startClientY;
+					if ( Math.sqrt( dx0 * dx0 + dy0 * dy0 ) >= PAN_CLICK_THRESHOLD_PX ) {
+						movedForPopover = true;
+					}
+				}
 
 				var clientX = moveEvt.clientX;
 				var clientY = moveEvt.clientY;
@@ -1924,6 +2023,15 @@
 				pinEl.removeEventListener( 'pointerup', endDrag );
 				pinEl.removeEventListener( 'pointercancel', endDrag );
 				setSelectedPinId( pinId );
+
+				// ドラッグ(movedForPopover)でもpointercancel(座標が信頼できない中断)でも
+				// なく、クリックとして完了した場合のみPopoverをtoggleする。pointerdown
+				// 自体ではtoggleしない(ドラッグのたびにPopoverが開閉してしまうため)。
+				if ( ! movedForPopover && endEvt && endEvt.type !== 'pointercancel' ) {
+					setOpenPopoverPinId( function( prev ) {
+						return ( prev === pinId ) ? null : pinId;
+					} );
+				}
 			}
 
 			pinEl.addEventListener( 'pointermove', handleMove );
@@ -2074,9 +2182,29 @@
 			} );
 		}
 
+		// 選択中のピンを削除する。作業を継続しやすいよう、削除後は次のピンを自動選択する
+		// (260919〜。削除前のindex位置に残っているピンがあればそれ=「次のピン」、
+		// 無ければひとつ前のピン、1件も残らなければ未選択)。自動選択してもPopoverは
+		// 開かない(選択とPopover open stateは独立した別概念のため)。削除したピンの
+		// Popoverが開いていた場合のみ明示的に閉じる。
 		function removeSelectedPin() {
-			updatePins( pins.filter( function( p ) { return p.id !== selectedPinId; } ) );
-			setSelectedPinId( null );
+			var ids = pins.map( function( p ) { return p.id; } );
+			var index = ids.indexOf( selectedPinId );
+			if ( index === -1 ) {
+				return;
+			}
+			var nextPins = pins.filter( function( p ) { return p.id !== selectedPinId; } );
+			var wasOpenPopover = ( openPopoverPinId === selectedPinId );
+			updatePins( nextPins );
+			var nextSelectedId = null;
+			if ( nextPins.length > 0 ) {
+				var nextIndex = ( index < nextPins.length ) ? index : nextPins.length - 1;
+				nextSelectedId = nextPins[ nextIndex ].id;
+			}
+			setSelectedPinId( nextSelectedId );
+			if ( wasOpenPopover ) {
+				setOpenPopoverPinId( null );
+			}
 		}
 
 		var selectedPin = null;
@@ -2385,8 +2513,11 @@
 					// pointerdown側のstopPropagationは、後続の(別イベントである)clickの
 					// バブリングまでは止めない。ここで止めないと、既存ピンをクリックしただけ
 					// (ドラッグなし)でも click が画像側(handleViewportPointerDown)まで届き、
-					// 同じ位置に意図しない新規ピンが追加されてしまう。
-					onClick: function( evt ) { evt.stopPropagation(); }
+					// 同じ位置に意図しない新規ピンが追加されてしまう。dblclickも同様に、
+					// Pin/Markerを素早く2回クリックしただけで背景側のダブルクリック
+					// (handleViewportDoubleClick、Pin追加候補の表示)まで届かないよう止める。
+					onClick: function( evt ) { evt.stopPropagation(); },
+					onDoubleClick: function( evt ) { evt.stopPropagation(); }
 				},
 				buildPinVisualOnly( pin, modalDisplaySettings, isPinSelected )
 			);
@@ -2423,17 +2554,28 @@
 					style: style,
 					ref: function( node ) { registerLabelRef( pin.id, node ); },
 					onPointerDown: function( evt ) { handleLabelDragPointerDown( pin.id, evt ); },
-					onClick: function( evt ) { evt.stopPropagation(); }
+					onClick: function( evt ) { evt.stopPropagation(); },
+					onDoubleClick: function( evt ) { evt.stopPropagation(); }
 				}, pin.label )
 			);
 		} );
 
-		// 選択中のピンのポップオーバーを、現在の「ポップオーバー」設定を反映した状態で
+		// Popoverを開くかどうかは openPopoverPinId(Pin/Marker本体のクリック確定で
+		// トグル)で決める。selectedPinId(個別設定に表示するピン)とは独立した別概念
+		// のため、選択されているだけのピンのPopoverを自動表示しない(260919〜)。
+		var openPopoverPin = null;
+		pins.forEach( function( p ) {
+			if ( p.id === openPopoverPinId ) {
+				openPopoverPin = p;
+			}
+		} );
+
+		// 開いているピンのポップオーバーを、現在の「ポップオーバー」設定を反映した状態で
 		// モーダル内の画像編集エリアの実画像の上に表示する(CanvasPopoverPreview参照。
-		// ラベル・説明文がどちらも空のときは何も表示しない)。
-		var modalPopoverElement = selectedPin
+		// 説明文が空のときは何も表示しない)。
+		var modalPopoverElement = openPopoverPin
 			? el( CanvasPopoverPreview, {
-				pin: selectedPin,
+				pin: openPopoverPin,
 				popoverSettings: modalPopoverSettings,
 				ratio: modalFitRatio,
 				wrapperRef: modalWrapperRef,
@@ -2462,7 +2604,8 @@
 					className: 'image-pin-block-editor__pending-menu',
 					style: { left: pendingMenu.left + 'px', top: pendingMenu.top + 'px' },
 					onPointerDown: function( evt ) { evt.stopPropagation(); },
-					onClick: function( evt ) { evt.stopPropagation(); }
+					onClick: function( evt ) { evt.stopPropagation(); },
+					onDoubleClick: function( evt ) { evt.stopPropagation(); }
 				},
 				el(
 					Button,
@@ -2478,10 +2621,12 @@
 			el(
 				'div',
 				{
+					ref: modalPreviewViewportRef,
 					className: 'image-pin-block-editor__modal-preview-viewport'
 						+ ( modalZoom > MODAL_ZOOM_MIN ? ' is-zoomed' : '' ),
 					style: { width: modalPreviewSize.width + 'px', height: modalPreviewSize.height + 'px' },
-					onPointerDown: handleViewportPointerDown
+					onPointerDown: handleViewportPointerDown,
+					onDoubleClick: handleViewportDoubleClick
 				},
 				el(
 					'div',
