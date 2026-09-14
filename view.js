@@ -44,13 +44,17 @@
 		return hasMarker ? LABEL_POSITION_FALLBACK_MARKER : LABEL_POSITION_FALLBACK_ROUND;
 	}
 
+	// 260916: Label中心までの距離をangleに依存させない(真円上を移動させる)。
+	// targetRadius(Pin/Markerの外接円半径)+LABEL_GAP+labelRadius(Label矩形全体を
+	// 包む半径)は、いずれもangleに依存しない定数のため、distance自体が一定になる。
+	// 詳細はeditor.js側のcalculateCircleLabelOffsetのコメント参照。
 	function calculateCircleLabelOffset( targetWidth, targetHeight, labelPosition, labelSize ) {
 		var angle = labelPosition * Math.PI * 2;
 		var nx = Math.cos( angle );
 		var ny = Math.sin( angle );
-		var baseRadius = Math.sqrt( Math.pow( targetWidth / 2, 2 ) + Math.pow( targetHeight / 2, 2 ) );
-		var support = Math.abs( nx ) * ( labelSize.width / 2 ) + Math.abs( ny ) * ( labelSize.height / 2 );
-		var distance = baseRadius + LABEL_GAP + support;
+		var targetRadius = Math.sqrt( Math.pow( targetWidth / 2, 2 ) + Math.pow( targetHeight / 2, 2 ) );
+		var labelRadius = Math.sqrt( Math.pow( labelSize.width / 2, 2 ) + Math.pow( labelSize.height / 2, 2 ) );
+		var distance = targetRadius + LABEL_GAP + labelRadius;
 		return { x: nx * distance, y: ny * distance };
 	}
 

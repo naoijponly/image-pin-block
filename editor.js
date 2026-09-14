@@ -194,23 +194,28 @@
 	}
 
 	// Pin/Markerの外接円上での、Label中心の「Pin/Marker中心からのオフセット」を求める。
-	//   1. targetWidth/targetHeight(Pin/Markerの実表示矩形)から外接円半径を求める
-	//      (矩形の四隅が必ず円内に収まる最小半径。正方形/円のPin/Markerでは
-	//      対角線の半分と一致する)。
-	//   2. labelPositionから求めた角度の単位方向ベクトル(nx, ny)を使い、Label自身の
-	//      幅・高さから、その方向へLabelの矩形がPin/Marker側へ食い込まないために
-	//      必要な支持距離(support distance)を求める:
-	//      abs(nx)*labelWidth/2 + abs(ny)*labelHeight/2
-	//      (円は楕円と異なり全方位で半径が同じため、この支持距離の計算だけで
-	//      斜め方向を含めた非重なりが保証される)。
-	//   3. 外接円半径+LABEL_GAP+支持距離だけ、その方向へ進めた点をLabelの中心とする。
+	//   1. targetWidth/targetHeight(Pin/Markerの実表示矩形)から外接円半径targetRadiusを
+	//      求める(矩形の四隅が必ず円内に収まる最小半径)。
+	//   2. Label自身の幅・高さから、Label矩形全体を包む半径labelRadius
+	//      (sqrt((labelWidth/2)^2 + (labelHeight/2)^2))を求める。
+	//   3. Label中心までの距離を targetRadius + LABEL_GAP + labelRadius とする。
+	//      260916: 以前はここに角度依存の support distance
+	//      (abs(nx)*labelWidth/2 + abs(ny)*labelHeight/2)を加えていたが、angleによって
+	//      距離が変化するため、Label中心の軌道が真円にならず、辺→角の遷移で外側へ
+	//      「ぽこっ」と膨らんで見える不具合があった。labelRadius(角度に依存しない一定値)
+	//      へ置き換えることで、distance自体がangleに依存しなくなり、Label中心が
+	//      常に半径一定の真円上を移動するようにした(横長・縦長のLabelでは、対角線基準の
+	//      ため上下または左右方向で必要以上に離れることがあるが、意図的に許容している。
+	//      優先順位は「食い込まない」>「真円」>「距離を詰める」)。
+	//   4. labelPositionから求めた角度の単位方向ベクトル(cos, sin)に、その距離を
+	//      掛けた点をLabelの中心とする。
 	function calculateCircleLabelOffset( targetWidth, targetHeight, labelPosition, labelSize ) {
 		var angle = labelPosition * Math.PI * 2;
 		var nx = Math.cos( angle );
 		var ny = Math.sin( angle );
-		var baseRadius = Math.sqrt( Math.pow( targetWidth / 2, 2 ) + Math.pow( targetHeight / 2, 2 ) );
-		var support = Math.abs( nx ) * ( labelSize.width / 2 ) + Math.abs( ny ) * ( labelSize.height / 2 );
-		var distance = baseRadius + LABEL_GAP + support;
+		var targetRadius = Math.sqrt( Math.pow( targetWidth / 2, 2 ) + Math.pow( targetHeight / 2, 2 ) );
+		var labelRadius = Math.sqrt( Math.pow( labelSize.width / 2, 2 ) + Math.pow( labelSize.height / 2, 2 ) );
+		var distance = targetRadius + LABEL_GAP + labelRadius;
 		return { x: nx * distance, y: ny * distance, nx: nx, ny: ny };
 	}
 
@@ -903,6 +908,60 @@
 		} );
 	}
 
+	// PNG Blobを生成する(元画像・マーカー画像の読み込み→Canvas描画→toBlob)。
+	// 生成の失敗(画像読み込み失敗・Canvas 2D非対応・CORS等によるtoBlob失敗)は
+	// Promiseのrejectとして呼び出し側へ伝える(呼び出し側でエラー表示する)。
+	// この関数自体は画像読み込みを含むため非同期(=ユーザー操作からの時間が空きうる)
+	// であり、showSaveFilePicker()より後に呼ぶ(先に呼ぶとtransient user activationを
+	// 失う可能性があるため)。
+	function generatePngBlob( imageUrl, exportWidth, exportHeight, pins, display ) {
+		var markerUrls = [];
+		pins.forEach( function( pin ) {
+			if ( pin.markerImageUrl && markerUrls.indexOf( pin.markerImageUrl ) === -1 ) {
+				markerUrls.push( pin.markerImageUrl );
+			}
+		} );
+
+		var loadPromises = [ loadImageForExport( imageUrl ) ].concat(
+			markerUrls.map( function( url ) { return loadImageForExport( url ); } )
+		);
+
+		return Promise.all( loadPromises ).then( function( images ) {
+			var mainImg = images[ 0 ];
+			var markerImagesByUrl = {};
+			markerUrls.forEach( function( url, index ) {
+				markerImagesByUrl[ url ] = images[ index + 1 ];
+			} );
+
+			var canvas = document.createElement( 'canvas' );
+			canvas.width = exportWidth;
+			canvas.height = exportHeight;
+			var ctx = canvas.getContext( '2d' );
+			if ( ! ctx ) {
+				return Promise.reject( new Error( 'canvas-2d-not-supported' ) );
+			}
+			ctx.drawImage( mainImg, 0, 0, exportWidth, exportHeight );
+
+			pins.forEach( function( pin ) {
+				drawPinForExport( ctx, pin, markerImagesByUrl, exportWidth, display );
+			} );
+
+			return new Promise( function( resolve, reject ) {
+				try {
+					canvas.toBlob( function( resultBlob ) {
+						if ( ! resultBlob ) {
+							reject( new Error( 'png-blob-generation-failed' ) );
+							return;
+						}
+						resolve( resultBlob );
+					} );
+				} catch ( err ) {
+					reject( err );
+				}
+			} );
+		} );
+	}
+
 	// 生成したBlobをファイルとして保存させる(Blob URL + 一時的な<a download>要素)。
 	// showSaveFilePicker() が使えない環境でのfallback、および対応環境でユーザーが
 	// キャンセルしなかった場合の実際の書き込み経路以外(=フォールバック専用)として使う。
@@ -937,36 +996,14 @@
 		}
 	}
 
-	// PNG Blobを保存する。window.showSaveFilePicker() が使える環境では、OS標準の
-	// 「名前を付けて保存」ダイアログを表示し、ユーザーが保存先フォルダ・ファイル名を
-	// 選べるようにする。非対応環境では、従来どおりBlob URL + <a download>要素で
-	// (ブラウザ既定のダウンロード先へ)保存する。戻り値はPromiseで、ユーザーが
-	// Save File Pickerをキャンセルした場合(AbortError)は、エラーとして扱わずに
-	// 解決する(呼び出し側でエラー表示させないため)。実際の書き込み失敗(write/close)
-	// はエラーとして reject する。
-	function savePngBlob( blob, fileName ) {
-		if ( typeof window.showSaveFilePicker !== 'function' ) {
-			triggerPngDownload( blob, fileName );
-			return Promise.resolve();
-		}
-		return window.showSaveFilePicker( {
-			suggestedName: fileName,
-			types: [ {
-				description: 'PNG image',
-				accept: { 'image/png': [ '.png' ] }
-			} ]
-		} ).then( function( handle ) {
-			return handle.createWritable().then( function( writable ) {
-				return writable.write( blob ).then( function() {
-					return writable.close();
-				} );
+	// FileSystemFileHandleへBlobを書き込む(createWritable→write→close)。呼び出し側が
+	// PNG生成(generatePngBlob)を先に成功させてから呼ぶことで、生成に失敗した場合に
+	// 空ファイル・書きかけファイルを残さないようにしている。
+	function writeBlobToFileHandle( handle, blob ) {
+		return handle.createWritable().then( function( writable ) {
+			return writable.write( blob ).then( function() {
+				return writable.close();
 			} );
-		} ).catch( function( err ) {
-			// ユーザーによるキャンセル(AbortError)は正常終了として扱う(エラーにしない)。
-			if ( err && 'AbortError' === err.name ) {
-				return;
-			}
-			throw err;
 		} );
 	}
 
@@ -1273,67 +1310,55 @@
 		// 「画像として保存」(PNG書き出し)。元画像(natural dimensions)へ、保存済みの
 		// pins[]・見た目設定からPin/Marker/Labelを一から合成する(Editor Previewの
 		// スクリーンショットではない。詳細はdrawPinForExport等のコメント参照)。
-		// マーカー画像は複数のピンで同じURLを使い回している場合があるため、URLごとに
-		// 一度だけ読み込む。
+		//
+		// showSaveFilePicker()が使える環境では、このクリックハンドラから**直接**
+		// (画像読み込み等の非同期処理を挟む前に)呼ぶ。showSaveFilePicker()は
+		// transient user activationを必要とし、間に非同期処理(画像読み込み・Canvas
+		// 描画等、時間がかかりうる)を挟むと、Picker表示時には失効している可能性が
+		// あるため。保存先が決まった**あとで**PNGを生成し(generatePngBlob)、生成に
+		// 成功した場合のみ実ファイルへの書き込み(writeBlobToFileHandle→
+		// createWritable/write/close)を開始する(生成に失敗した場合、書き込み自体を
+		// 一切始めないため、空ファイル・書きかけファイルを残さない)。
 		function handleSaveAsImage() {
 			if ( ! attributes.imageUrl || ! attributes.imageWidth || ! attributes.imageHeight ) {
 				return;
 			}
 			var exportWidth = attributes.imageWidth;
 			var exportHeight = attributes.imageHeight;
+			var fileName = buildExportFileName( attributes.imageUrl );
 
-			var markerUrls = [];
-			pins.forEach( function( pin ) {
-				if ( pin.markerImageUrl && markerUrls.indexOf( pin.markerImageUrl ) === -1 ) {
-					markerUrls.push( pin.markerImageUrl );
-				}
-			} );
+			function reportGenerationError() {
+				window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
+			}
 
-			var loadPromises = [ loadImageForExport( attributes.imageUrl ) ].concat(
-				markerUrls.map( function( url ) { return loadImageForExport( url ); } )
-			);
-
-			Promise.all( loadPromises ).then( function( images ) {
-				var mainImg = images[ 0 ];
-				var markerImagesByUrl = {};
-				markerUrls.forEach( function( url, index ) {
-					markerImagesByUrl[ url ] = images[ index + 1 ];
-				} );
-
-				var canvas = document.createElement( 'canvas' );
-				canvas.width = exportWidth;
-				canvas.height = exportHeight;
-				var ctx = canvas.getContext( '2d' );
-				if ( ! ctx ) {
-					window.alert( __( 'Your browser does not support saving as an image.', 'image-pin-block' ) );
-					return;
-				}
-				ctx.drawImage( mainImg, 0, 0, exportWidth, exportHeight );
-
-				pins.forEach( function( pin ) {
-					drawPinForExport( ctx, pin, markerImagesByUrl, exportWidth, displaySettings );
-				} );
-
-				try {
-					canvas.toBlob( function( resultBlob ) {
-						if ( ! resultBlob ) {
-							window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
-							return;
-						}
-						var fileName = buildExportFileName( attributes.imageUrl );
-						// savePngBlob()は、対応環境ではユーザー操作(このクリック)から直接
-						// window.showSaveFilePicker()を呼ぶ(setTimeout等を挟んでuser
-						// activationを失わないようにするため)。ユーザーがダイアログを
-						// キャンセルした場合はエラーとして扱わない(savePngBlob内部で吸収済み)。
-						savePngBlob( resultBlob, fileName ).catch( function() {
-							window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
-						} );
+			if ( typeof window.showSaveFilePicker === 'function' ) {
+				window.showSaveFilePicker( {
+					suggestedName: fileName,
+					types: [ {
+						description: 'PNG image',
+						accept: { 'image/png': [ '.png' ] }
+					} ]
+				} ).then( function( handle ) {
+					return generatePngBlob( attributes.imageUrl, exportWidth, exportHeight, pins, displaySettings ).then( function( blob ) {
+						return writeBlobToFileHandle( handle, blob );
 					} );
-				} catch ( err ) {
-					window.alert( __( 'Unable to save the image due to restrictions on an external image.', 'image-pin-block' ) );
-				}
+				} ).catch( function( err ) {
+					// ユーザーによるキャンセル(AbortError)は正常終了として扱う
+					// (エラー表示しない・何も保存せず終了する)。
+					if ( err && 'AbortError' === err.name ) {
+						return;
+					}
+					reportGenerationError();
+				} );
+				return;
+			}
+
+			// showSaveFilePicker非対応環境: 従来どおりPNG生成後にBlob URL + <a download>
+			// で(ブラウザ既定のダウンロード先へ)保存する。
+			generatePngBlob( attributes.imageUrl, exportWidth, exportHeight, pins, displaySettings ).then( function( blob ) {
+				triggerPngDownload( blob, fileName );
 			} ).catch( function() {
-				window.alert( __( 'Unable to save the image. Please try again.', 'image-pin-block' ) );
+				reportGenerationError();
 			} );
 		}
 
