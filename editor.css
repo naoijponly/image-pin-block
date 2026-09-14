@@ -171,78 +171,105 @@
 	justify-content: center;
 }
 
-/* 編集用モーダル(v0.2.0)本体のレイアウト。isFullScreenのため画面全体に近いサイズになる。 */
+/* 編集用モーダル(v0.2.0)本体のレイアウト。
+   モーダル自体の高さを固定し(ビューポートに応じてmax-height)、外側のページは
+   スクロールさせない。中の各領域(左上・左下・右)がそれぞれ自分の分だけスクロールする。
+   width/max-width/heightは、@wordpress/componentsのModal既定サイズを確実に上書きする
+   必要があるため !important を付けている。 */
+.image-pin-block-editor__modal {
+	width: 95vw !important;
+	max-width: 920px !important;
+	height: 85vh !important;
+	max-height: 85vh !important;
+	display: flex;
+	flex-direction: column;
+}
+
 .image-pin-block-editor__modal .components-modal__content {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
 	padding: 0;
 }
 
 .image-pin-block-editor__modal .components-modal__children-container {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
 	max-width: none;
-	padding: 16px 24px 24px;
+	padding: 0;
 }
 
-/* 「ブロック全体の設定」内の項目を2列に並べ、項目数が多くても縦に間延びしないようにする。
-   色設定行(.image-pin-block-editor__color-row)・チェックボックス等、幅を持て余す要素は
-   2列分(grid-column: 1 / -1)で全幅にする。 */
-.image-pin-block-editor__modal-settings-grid {
+/* 左(60%)/右(40%)の2カラム。1行のグリッドで、両カラムの高さは常に揃う
+   (CSS Gridの既定の stretch により、右カラム=左カラムの合計の高さになる)。 */
+.image-pin-block-editor__modal-grid {
+	flex: 1;
+	min-height: 0;
 	display: grid;
-	grid-template-columns: 1fr 1fr;
-	gap: 4px 24px;
-	align-items: start;
+	grid-template-columns: 3fr 2fr;
 }
 
-.image-pin-block-editor__modal-settings-heading {
-	grid-column: 1 / -1;
-	margin: 12px 0 0;
-	padding-top: 12px;
-	border-top: 1px solid #e0e0e0;
-	font-size: 13px;
-	font-weight: 600;
+/* 左カラム: 上段(画像編集エリア)と下段(個別設定)を縦に積む。この2段の合計の高さで
+   右カラムの高さも決まる(右カラムがそれより長くなった場合は右カラム内だけがスクロール)。 */
+.image-pin-block-editor__modal-left {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	padding: 20px;
+	overflow: hidden;
 }
 
-@media ( max-width: 782px ) {
-	.image-pin-block-editor__modal-settings-grid {
-		grid-template-columns: 1fr;
-	}
+.image-pin-block-editor__modal-left-top {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
 }
 
-/* 「画像＋右の基本設定」の行(v0.2.0)。左(画像編集エリア)を優先して広く取り、
-   右(選択中のピンの基本設定)は固定幅のコンパクトな列にする。 */
-.image-pin-block-editor__modal-main-row {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) 300px;
-	gap: 24px;
-	margin-top: 20px;
-	align-items: start;
+.image-pin-block-editor__modal-left-bottom {
+	flex: 0 0 auto;
+	padding-top: 16px;
 }
 
-@media ( max-width: 782px ) {
-	.image-pin-block-editor__modal-main-row {
-		grid-template-columns: 1fr;
-	}
-}
-
-/* 画像編集エリアをスクロール可能にする(ズームで画像が拡大されると、
-   コンテナからはみ出す分をスクロールで見られるようにするため)。 */
-.image-pin-block-editor__modal-image-scroll {
-	max-height: 60vh;
+/* 画像編集エリア: 常に画像全体が枠内に収まる(object-fit: containと同等の考え方)。
+   wrapper(.image-pin-block-editor__modal-canvas)自体の width/height は JS 側で
+   widthRatioから計算した実寸pxを指定しており、このコンテナはそれを中央寄せするだけ。
+   ズームで画像がこの枠より大きくなった場合のみ、overflow: auto でスクロールできる。 */
+.image-pin-block-editor__modal-image-box {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	overflow: auto;
-	border: 1px solid #e0e0e0;
 	background: #f0f0f0;
+	border: 1px solid #e0e0e0;
+	margin: 8px 0 12px;
 }
 
-.image-pin-block-editor__modal-basic-settings {
-	padding: 4px 0;
+.image-pin-block-editor__modal-canvas .image-pin-block-editor__image {
+	display: block;
+	width: 100%;
+	height: 100%;
+	max-width: none;
 }
 
-/* 「ピン一覧」: ピンをタブ状に横並びで表示する。 */
+/* 「ピン一覧」カード: 背景色・細い枠線・角丸で、画像編集エリア・個別設定とはっきり
+   区切る。 */
+.image-pin-block-editor__pin-list-card {
+	flex: 0 0 auto;
+	background: #f0f0f0;
+	border: 0.5px solid #ccc;
+	border-radius: 6px;
+	padding: 10px 12px;
+}
+
 .image-pin-block-editor__pin-tabs {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 4px;
-	margin-top: 20px;
-	padding-top: 16px;
-	border-top: 1px solid #e0e0e0;
 }
 
 .image-pin-block-editor__pin-tab {
@@ -256,14 +283,79 @@
 	display: flex;
 	gap: 8px;
 	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid #ddd;
 }
 
-.image-pin-block-editor__modal-marker-section {
-	margin-top: 16px;
-	padding-top: 16px;
+/* 個別設定(選択中のピンのみが対象。カードにはせず、区切り線を持つ3列に並べる)。 */
+.image-pin-block-editor__modal-individual-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr 1fr;
+	gap: 0 20px;
+}
+
+.image-pin-block-editor__modal-individual-col:not(:last-child) {
+	border-right: 1px solid #e0e0e0;
+	padding-right: 20px;
+}
+
+.image-pin-block-editor__modal-individual-empty {
+	color: #757575;
+	font-style: italic;
+}
+
+@media ( max-width: 782px ) {
+	.image-pin-block-editor__modal {
+		width: 100vw !important;
+		max-width: 100vw !important;
+		height: 100vh !important;
+		max-height: 100vh !important;
+	}
+
+	.image-pin-block-editor__modal-grid {
+		grid-template-columns: 1fr;
+		grid-auto-rows: auto;
+		overflow-y: auto;
+	}
+
+	.image-pin-block-editor__modal-individual-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.image-pin-block-editor__modal-individual-col:not(:last-child) {
+		border-right: none;
+		border-bottom: 1px solid #e0e0e0;
+		padding-right: 0;
+		padding-bottom: 16px;
+		margin-bottom: 16px;
+	}
+}
+
+/* 右カラム: ブロック全体の設定。折りたたみ無しの常時展開で、縦一本の独立した領域として
+   スクロールする(1列。右カラムの幅が狭いため2列にはしない)。 */
+.image-pin-block-editor__modal-right {
+	min-height: 0;
+	overflow-y: auto;
+	padding: 20px;
+	border-left: 1px solid #e0e0e0;
+}
+
+.image-pin-block-editor__modal-settings-grid {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.image-pin-block-editor__modal-settings-heading {
+	margin: 12px 0 0;
+	padding-top: 12px;
 	border-top: 1px solid #e0e0e0;
+	font-size: 13px;
+	font-weight: 600;
 }
 
-.image-pin-block-editor__modal-marker-section .image-pin-block-editor__marker-heading {
+.image-pin-block-editor__modal-settings-heading--first {
 	margin-top: 0;
+	padding-top: 0;
+	border-top: none;
 }

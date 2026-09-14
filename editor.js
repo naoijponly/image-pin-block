@@ -635,26 +635,43 @@
 
 		displaySettings.widthRatio = widthRatio;
 
+		// modalImageBoxRef: 画像を中央寄せで収める箱(常に画像全体が見える「フィット」状態の
+		// 基準)。modalWrapperRef: 実際に画像・ピンを描画する要素で、常にこの箱にフィットする
+		// サイズ(widthRatio=100%相当)を明示的な width/height として持つ(inline-blockの
+		// 自動サイズには頼らない。理由は下記widthRatioの計算コメント参照)。
+		var modalImageBoxRef = useRef( null );
 		var modalWrapperRef = useRef( null );
 
-		// モーダル側のwidthRatio。上と同じ考え方だが、モーダルは開いている間だけDOMが
-		// 存在する(isModalOpen && ... の条件付きレンダリング)ため、isModalOpenを依存配列に
-		// 含めて開いた時点で測り直す。ズーム(modalZoom)はCSSのtransform: scale()で
-		// 画像・ピンをまとめて拡大縮小するだけなので、この比率自体の再計算には影響しない。
+		// モーダル側のwidthRatio。編集画面本体側(widthRatio)は「画像の表示幅」だけを
+		// 基準にしていたが、モーダルの画像編集エリアは「箱に画像全体が収まるように」
+		// 縦横どちらも制約されるため、幅基準の比率(箱の幅 / 画像の幅)と高さ基準の比率
+		// (箱の高さ / 画像の高さ)のうち小さい方を採用する(いわゆる contain のロジック)。
+		// これにより、modalWrapperRefの width/height を「画像のnaturalWidth/Height ×
+		// この比率」の明示的なpx値として指定すれば、常に画像全体が箱に収まり、かつ
+		// wrapperの矩形(getBoundingClientRect())が実際に見えている画像の範囲と完全に
+		// 一致する(パーセント座標のクリック・ドラッグ判定がずれない)。
+		// モーダルは開いている間だけDOMが存在するため、isModalOpenを依存配列に含めて
+		// 開いた時点で測り直す。ズーム(modalZoom)はCSSのtransform: scale()で見た目だけを
+		// 拡大縮小するだけなので、この比率自体の再計算には影響しない。
 		var modalWidthRatioState = useState( 1 );
 		var modalWidthRatio = modalWidthRatioState[ 0 ];
 		var setModalWidthRatio = modalWidthRatioState[ 1 ];
 
 		useEffect( function() {
-			var wrapperEl = modalWrapperRef.current;
-			if ( ! isModalOpen || ! wrapperEl || ! attributes.imageUrl ) {
+			var boxEl = modalImageBoxRef.current;
+			if ( ! isModalOpen || ! boxEl || ! attributes.imageUrl ) {
 				return;
 			}
 
 			function recalc() {
 				var naturalWidth = attributes.imageWidth || 0;
-				var currentWidth = wrapperEl.clientWidth;
-				var nextRatio = ( naturalWidth > 0 && currentWidth > 0 ) ? ( currentWidth / naturalWidth ) : 1;
+				var naturalHeight = attributes.imageHeight || 0;
+				var boxWidth = boxEl.clientWidth;
+				var boxHeight = boxEl.clientHeight;
+				var nextRatio = 1;
+				if ( naturalWidth > 0 && naturalHeight > 0 && boxWidth > 0 && boxHeight > 0 ) {
+					nextRatio = Math.min( boxWidth / naturalWidth, boxHeight / naturalHeight );
+				}
 				setModalWidthRatio( nextRatio );
 			}
 
@@ -664,9 +681,9 @@
 				return;
 			}
 			var ro = new window.ResizeObserver( recalc );
-			ro.observe( wrapperEl );
+			ro.observe( boxEl );
 			return function() { ro.disconnect(); };
-		}, [ isModalOpen, attributes.imageUrl, attributes.imageWidth ] );
+		}, [ isModalOpen, attributes.imageUrl, attributes.imageWidth, attributes.imageHeight ] );
 
 		// マーカー画像の実寸(naturalWidth、px)をピンIDごとにキャッシュする。
 		// <img> の読み込み完了(onLoad)時に記録し、buildPinContent() が上限クランプの計算に使う
@@ -1027,13 +1044,14 @@
 			);
 		}
 
-		// モーダル内「ブロック全体の設定」(折りたたみ、初期状態は閉)。ピンごとではなく
-		// ブロック全体に対する設定をまとめる。既存の属性をそのまま使い、新規属性は追加しない
-		// (旧「Display settings」「Pin color」「Pin label」「Popover」パネルの内容を統合)。
-		// 2列グリッドに収め、項目数が多くても縦に間延びしないようにする(editor.css参照)。
+		// モーダル右側「ブロック全体の設定」。ピンごとではなくブロック全体に対する設定を
+		// まとめる。既存の属性をそのまま使い、新規属性は追加しない(旧「Display settings」
+		// 「Pin color」「Pin label」「Popover」パネルの内容を統合)。折りたたみ無しの常時展開
+		// とし、モーダル右側の縦一本の領域に収める(1列。右側の幅が狭いため2列にはしない)。
 		var blockSettingsPanel = el(
-			PanelBody,
-			{ title: __( 'Block-wide settings', 'image-pin-block' ), initialOpen: false },
+			'div',
+			{ className: 'image-pin-block-editor__modal-right' },
+			el( 'h3', { className: 'image-pin-block-editor__modal-settings-heading image-pin-block-editor__modal-settings-heading--first' }, __( 'Block-wide settings', 'image-pin-block' ) ),
 			el(
 				'div',
 				{ className: 'image-pin-block-editor__modal-settings-grid' },
@@ -1246,19 +1264,30 @@
 			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: modalPopoverSettings } )
 			: null;
 
-		// 「画像＋右の基本設定」左側: 画像編集エリア。ズームは transform: scale() で
-		// 見た目だけを拡大縮小する(コンテナ自体のレイアウト上の幅は変えないため、
-		// パーセント座標のクリック判定・ドラッグ判定はgetBoundingClientRect()を使う限り
-		// ズーム倍率に関わらず正しく動作する。詳細はhandleModalPinPointerDown参照)。
+		// 「画像編集エリア」: モーダル左上。常に画像全体が箱(modalImageBoxRef)に収まる
+		// 状態を基準とし(widthRatio参照)、ズームは transform: scale() で見た目だけを
+		// 拡大縮小する。wrapper自身には widthRatio から計算した明示的な width/height
+		// (px)を指定する(display:inline-blockの自動サイズには頼らない。理由: 画像と
+		// 箱のアスペクト比が異なると、箱いっぱいにフィットさせる際に上下または左右に
+		// 余白(レターボックス)が生まれるが、その余白の分だけwrapperが実際に見えている
+		// 画像より大きくなってしまうと、パーセント座標のクリック・ドラッグ判定が
+		// ずれてしまうため)。transformはレイアウト上のサイズを変えないため、
+		// getBoundingClientRect()を使う限りズーム倍率に関わらず正しく動作する
+		// (詳細はhandleModalPinPointerDown参照)。
 		var modalImageArea = el(
 			'div',
-			{ className: 'image-pin-block-editor__modal-image-scroll' },
+			{ className: 'image-pin-block-editor__modal-image-box', ref: modalImageBoxRef },
 			el(
 				'div',
 				{
 					ref: modalWrapperRef,
 					className: 'image-pin-block-editor__wrapper image-pin-block-editor__modal-canvas',
-					style: { transform: 'scale(' + ( modalZoom / 100 ) + ')', transformOrigin: 'top left' },
+					style: {
+						width: ( ( attributes.imageWidth || 0 ) * modalWidthRatio ) + 'px',
+						height: ( ( attributes.imageHeight || 0 ) * modalWidthRatio ) + 'px',
+						transform: 'scale(' + ( modalZoom / 100 ) + ')',
+						transformOrigin: 'center center'
+					},
 					onClick: handleModalImageClick
 				},
 				el( 'img', {
@@ -1271,203 +1300,215 @@
 			)
 		);
 
-		// 「画像＋右の基本設定」右側: 選択中のピンの基本設定。開閉で高さが変動する要素・
-		// 横幅を要する要素は置かない(ラベル入力欄は showLabel の状態に関わらず常に表示する。
-		// 「Show label」はマーカー画像の見た目にのみ影響し、入力欄自体の表示/非表示には
-		// 使わない)。
-		var modalBasicSettings = selectedPin
-			? el(
-				'div',
-				{ className: 'image-pin-block-editor__modal-basic-settings' },
-				el( TextControl, {
-					label: __( 'Label', 'image-pin-block' ),
-					value: selectedPin.label,
-					onChange: function( value ) { updateSelectedPin( 'label', value ); }
-				} ),
-				selectedPin.markerImageUrl
-					? el( CheckboxControl, {
-						label: __( 'Show label', 'image-pin-block' ),
-						checked: selectedPin.showLabel !== false,
-						onChange: function( checked ) { updateSelectedPin( 'showLabel', checked ); }
-					} )
-					: null,
-				el( TextareaControl, {
-					label: __( 'Description', 'image-pin-block' ),
-					value: selectedPin.description,
-					onChange: function( value ) { updateSelectedPin( 'description', value ); }
-				} ),
-				el( SelectControl, {
-					label: __( 'Choose target heading', 'image-pin-block' ),
-					help: __( 'Only heading blocks with an HTML anchor set appear as options. If the heading you want isn\'t listed, set an HTML anchor for it under Advanced settings, or type the anchor name directly in the field below.', 'image-pin-block' ),
-					value: selectedPin.target,
-					options: targetOptions,
-					onChange: function( value ) { updateSelectedPin( 'target', value ); }
-				} ),
-				el( TextControl, {
-					label: __( 'Enter target anchor manually', 'image-pin-block' ),
-					help: __( 'For destinations that don\'t appear in the dropdown, such as non-heading blocks, enter the anchor name directly. You don\'t need to include the # symbol.', 'image-pin-block' ),
-					value: selectedPin.target,
-					onChange: function( value ) { updateSelectedPin( 'target', value.replace( /#/g, '' ).trim() ); }
-				} )
-			)
-			: el(
-				'div',
-				{ className: 'image-pin-block-editor__modal-basic-settings' },
-				el( 'p', {}, __( 'Click the image to add a pin.', 'image-pin-block' ) )
-			);
-
-		// 「画像＋右の基本設定」の行。左は常時表示の画像編集エリア(ズームスライダー付き)、
-		// 右は選択中のピンの基本設定。この行自体の高さは、上の「ブロック全体の設定」の
-		// 開閉状態に影響されない(通常のドキュメントフローで独立している)。
-		var modalMainRow = el(
+		// 「ピン一覧」カード: ピンをタブ状に並べ、クリックで編集対象を切り替える。「+」で
+		// 画像中央に新規ピンを追加する。「複製」「削除」は選択中のピンに対して行う。
+		// 背景色・枠線・角丸を持つカードとして、画像編集エリア・個別設定とはっきり区切る。
+		var pinListCard = el(
 			'div',
-			{ className: 'image-pin-block-editor__modal-main-row' },
+			{ className: 'image-pin-block-editor__pin-list-card' },
 			el(
 				'div',
-				{},
-				el( RangeControl, {
-					label: __( 'Zoom (%)', 'image-pin-block' ),
-					value: modalZoom,
-					min: MODAL_ZOOM_MIN,
-					max: MODAL_ZOOM_MAX,
-					onChange: function( value ) {
-						setModalZoom( ( typeof value === 'number' ) ? value : MODAL_ZOOM_DEFAULT );
-					}
+				{ className: 'image-pin-block-editor__pin-tabs' },
+				pins.map( function( pin, index ) {
+					return el(
+						Button,
+						{
+							key: pin.id,
+							variant: ( pin.id === selectedPinId ) ? 'primary' : 'secondary',
+							className: 'image-pin-block-editor__pin-tab',
+							onClick: function() { setSelectedPinId( pin.id ); }
+						},
+						pin.label || ( __( 'Pin', 'image-pin-block' ) + ' ' + ( index + 1 ) )
+					);
 				} ),
-				modalImageArea
+				el( Button, {
+					variant: 'secondary',
+					icon: 'plus',
+					label: __( 'Add pin', 'image-pin-block' ),
+					onClick: addPinAtCenter
+				} )
 			),
-			modalBasicSettings
-		);
-
-		// 「ピン一覧」: ピンをタブ状に並べ、クリックで編集対象を切り替える。「+」で
-		// 画像中央に新規ピンを追加する。「複製」「削除」は選択中のピンに対して行う。
-		var pinTabsRow = el(
-			'div',
-			{ className: 'image-pin-block-editor__pin-tabs' },
-			pins.map( function( pin, index ) {
-				return el(
-					Button,
-					{
-						key: pin.id,
-						variant: ( pin.id === selectedPinId ) ? 'primary' : 'secondary',
-						className: 'image-pin-block-editor__pin-tab',
-						onClick: function() { setSelectedPinId( pin.id ); }
-					},
-					pin.label || ( __( 'Pin', 'image-pin-block' ) + ' ' + ( index + 1 ) )
-				);
-			} ),
-			el( Button, {
-				variant: 'secondary',
-				icon: 'plus',
-				label: __( 'Add pin', 'image-pin-block' ),
-				onClick: addPinAtCenter
-			} )
-		);
-
-		var pinTabActionsRow = el(
-			'div',
-			{ className: 'image-pin-block-editor__pin-tab-actions' },
-			el( Button, {
-				variant: 'secondary',
-				disabled: ! selectedPin,
-				onClick: duplicateSelectedPin
-			}, __( 'Duplicate pin', 'image-pin-block' ) ),
-			el( Button, {
-				variant: 'secondary',
-				isDestructive: true,
-				disabled: ! selectedPin,
-				onClick: removeSelectedPin
-			}, __( 'Delete this pin', 'image-pin-block' ) )
-		);
-
-		// 「マーカー画像」: 選択中のピンごとの設定。項目数が少ないため常時展開の
-		// 単純な区画とし、折りたたみパネルにはしない。
-		var markerSection = selectedPin
-			? el(
+			el(
 				'div',
-				{ className: 'image-pin-block-editor__modal-marker-section' },
-				el( 'p', { className: 'image-pin-block-editor__marker-heading' }, __( 'Marker image', 'image-pin-block' ) ),
-				selectedPin.markerImageUrl
-					? el(
+				{ className: 'image-pin-block-editor__pin-tab-actions' },
+				el( Button, {
+					variant: 'secondary',
+					disabled: ! selectedPin,
+					onClick: duplicateSelectedPin
+				}, __( 'Duplicate pin', 'image-pin-block' ) ),
+				el( Button, {
+					variant: 'secondary',
+					isDestructive: true,
+					disabled: ! selectedPin,
+					onClick: removeSelectedPin
+				}, __( 'Delete this pin', 'image-pin-block' ) )
+			)
+		);
+
+		// モーダル左上段: ズームスライダー＋画像編集エリア＋ピン一覧カード。
+		var modalLeftTop = el(
+			'div',
+			{ className: 'image-pin-block-editor__modal-left-top' },
+			el( RangeControl, {
+				label: __( 'Zoom (%)', 'image-pin-block' ),
+				value: modalZoom,
+				min: MODAL_ZOOM_MIN,
+				max: MODAL_ZOOM_MAX,
+				onChange: function( value ) {
+					setModalZoom( ( typeof value === 'number' ) ? value : MODAL_ZOOM_DEFAULT );
+				}
+			} ),
+			modalImageArea,
+			pinListCard
+		);
+
+		// モーダル左下段(個別設定): 選択中のピンだけに対する設定。カードにはせず、
+		// 「ラベル・遷移先」「説明」「マーカー画像」の3列+区切り線で構成する。
+		// ラベル入力欄は showLabel の状態に関わらず常に表示する(「Show label」は
+		// マーカー画像の見た目にのみ影響し、入力欄自体の表示/非表示には使わない)。
+		var modalLeftBottom = el(
+			'div',
+			{ className: 'image-pin-block-editor__modal-left-bottom' },
+			selectedPin
+				? el(
+					'div',
+					{ className: 'image-pin-block-editor__modal-individual-grid' },
+					el(
 						'div',
-						{ className: 'image-pin-block-editor__marker-preview' },
-						el( 'img', { src: selectedPin.markerImageUrl, alt: '' } ),
-						el(
-							MediaUploadCheck,
-							{},
-							el( MediaUpload, {
-								onSelect: handleSelectMarkerImage,
-								value: selectedPin.markerImageId,
-								allowedTypes: [ 'image/png', 'image/jpeg' ],
-								render: function( obj ) {
-									return el(
-										Button,
-										{ variant: 'secondary', onClick: obj.open },
-										__( 'Change marker image', 'image-pin-block' )
-									);
-								}
+						{ className: 'image-pin-block-editor__modal-individual-col' },
+						el( TextControl, {
+							label: __( 'Label', 'image-pin-block' ),
+							value: selectedPin.label,
+							onChange: function( value ) { updateSelectedPin( 'label', value ); }
+						} ),
+						selectedPin.markerImageUrl
+							? el( CheckboxControl, {
+								label: __( 'Show label', 'image-pin-block' ),
+								checked: selectedPin.showLabel !== false,
+								onChange: function( checked ) { updateSelectedPin( 'showLabel', checked ); }
 							} )
-						),
-						el(
-							Button,
-							{ variant: 'tertiary', isDestructive: true, onClick: clearMarkerImage },
-							__( 'Remove marker image', 'image-pin-block' )
-						)
-					)
-					: el(
-						MediaUploadCheck,
-						{},
-						el( MediaUpload, {
-							onSelect: handleSelectMarkerImage,
-							allowedTypes: [ 'image/png', 'image/jpeg' ],
-							render: function( obj ) {
-								return el(
-									Button,
-									{ variant: 'secondary', onClick: obj.open },
-									__( 'Select marker image', 'image-pin-block' )
-								);
-							}
+							: null,
+						el( SelectControl, {
+							label: __( 'Choose target heading', 'image-pin-block' ),
+							help: __( 'Only heading blocks with an HTML anchor set appear as options. If the heading you want isn\'t listed, set an HTML anchor for it under Advanced settings, or type the anchor name directly in the field below.', 'image-pin-block' ),
+							value: selectedPin.target,
+							options: targetOptions,
+							onChange: function( value ) { updateSelectedPin( 'target', value ); }
+						} ),
+						el( TextControl, {
+							label: __( 'Enter target anchor manually', 'image-pin-block' ),
+							help: __( 'For destinations that don\'t appear in the dropdown, such as non-heading blocks, enter the anchor name directly. You don\'t need to include the # symbol.', 'image-pin-block' ),
+							value: selectedPin.target,
+							onChange: function( value ) { updateSelectedPin( 'target', value.replace( /#/g, '' ).trim() ); }
 						} )
 					),
-				selectedPin.markerImageUrl
-					// key にピンIDを含め、ピンを切り替えたときにClampedNumberControlの
-					// 下書き状態(内部useState)を新しい値でリセットする(ClampedNumberControl
-					// は制御コンポーネントではないため、keyを変えず値だけ変えても表示が
-					// 追従しない)。
-					? el( ClampedNumberControl, {
-						key: selectedPinId,
-						label: __( 'Marker image scale (%)', 'image-pin-block' ),
-						value: selectedPin.markerScale || DEFAULT_MARKER_SCALE,
-						min: MARKER_SCALE_MIN,
-						max: MARKER_SCALE_MAX,
-						defaultValue: DEFAULT_MARKER_SCALE,
-						onCommit: function( n ) { updateSelectedPin( 'markerScale', n ); }
-					} )
-					: null
-			)
-			: null;
+					el(
+						'div',
+						{ className: 'image-pin-block-editor__modal-individual-col' },
+						el( TextareaControl, {
+							label: __( 'Description', 'image-pin-block' ),
+							value: selectedPin.description,
+							onChange: function( value ) { updateSelectedPin( 'description', value ); }
+						} )
+					),
+					el(
+						'div',
+						{ className: 'image-pin-block-editor__modal-individual-col' },
+						el( 'p', { className: 'image-pin-block-editor__marker-heading' }, __( 'Marker image', 'image-pin-block' ) ),
+						selectedPin.markerImageUrl
+							? el(
+								'div',
+								{ className: 'image-pin-block-editor__marker-preview' },
+								el( 'img', { src: selectedPin.markerImageUrl, alt: '' } ),
+								el(
+									MediaUploadCheck,
+									{},
+									el( MediaUpload, {
+										onSelect: handleSelectMarkerImage,
+										value: selectedPin.markerImageId,
+										allowedTypes: [ 'image/png', 'image/jpeg' ],
+										render: function( obj ) {
+											return el(
+												Button,
+												{ variant: 'secondary', onClick: obj.open },
+												__( 'Change marker image', 'image-pin-block' )
+											);
+										}
+									} )
+								),
+								el(
+									Button,
+									{ variant: 'tertiary', isDestructive: true, onClick: clearMarkerImage },
+									__( 'Remove marker image', 'image-pin-block' )
+								)
+							)
+							: el(
+								MediaUploadCheck,
+								{},
+								el( MediaUpload, {
+									onSelect: handleSelectMarkerImage,
+									allowedTypes: [ 'image/png', 'image/jpeg' ],
+									render: function( obj ) {
+										return el(
+											Button,
+											{ variant: 'secondary', onClick: obj.open },
+											__( 'Select marker image', 'image-pin-block' )
+										);
+									}
+								} )
+							),
+						selectedPin.markerImageUrl
+							// key にピンIDを含め、ピンを切り替えたときにClampedNumberControlの
+							// 下書き状態(内部useState)を新しい値でリセットする
+							// (ClampedNumberControlは制御コンポーネントではないため、keyを
+							// 変えず値だけ変えても表示が追従しない)。
+							? el( ClampedNumberControl, {
+								key: selectedPinId,
+								label: __( 'Marker image scale (%)', 'image-pin-block' ),
+								value: selectedPin.markerScale || DEFAULT_MARKER_SCALE,
+								min: MARKER_SCALE_MIN,
+								max: MARKER_SCALE_MAX,
+								defaultValue: DEFAULT_MARKER_SCALE,
+								onCommit: function( n ) { updateSelectedPin( 'markerScale', n ); }
+							} )
+							: null
+					)
+				)
+				: el( 'p', { className: 'image-pin-block-editor__modal-individual-empty' }, __( 'Click the image to add a pin.', 'image-pin-block' ) )
+		);
+
+		// モーダル左カラム(60%): 上段(画像編集エリア)と下段(個別設定)を縦に積む。
+		// 右カラム(ブロック全体の設定)の高さには影響されない、独立した領域。
+		var modalLeft = el(
+			'div',
+			{ className: 'image-pin-block-editor__modal-left' },
+			modalLeftTop,
+			modalLeftBottom
+		);
 
 		// 編集用モーダル(v0.2.0)。「画像として保存」はヘッダーに場所だけ用意し、
 		// 機能は別フェーズで実装する(現時点では無効ボタン)。
-		// isFullScreen: true で画面全体に近いサイズにする。
+		// 左(60%)/右(40%)の2カラム。右カラム(blockSettingsPanel)は上下にまたがる
+		// 独立した縦一本の領域とし、内容が長い場合はその領域内だけでスクロールする
+		// (モーダル自体の高さは固定し、外側のページはスクロールしない。editor.css参照)。
 		var modalElement = isModalOpen
 			? el(
 				Modal,
 				{
 					title: __( 'Edit pins', 'image-pin-block' ),
 					onRequestClose: closeModal,
-					isFullScreen: true,
 					className: 'image-pin-block-editor__modal',
 					headerActions: el( Button, {
 						variant: 'secondary',
 						disabled: true
 					}, __( 'Save as image', 'image-pin-block' ) )
 				},
-				blockSettingsPanel,
-				modalMainRow,
-				pinTabsRow,
-				pinTabActionsRow,
-				markerSection
+				el(
+					'div',
+					{ className: 'image-pin-block-editor__modal-grid' },
+					modalLeft,
+					blockSettingsPanel
+				)
 			)
 			: null;
 

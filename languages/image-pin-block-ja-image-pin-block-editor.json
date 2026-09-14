@@ -1,5 +1,5 @@
 {
-	"translation-revision-date": "2026-09-12 00:00:00+0000",
+	"translation-revision-date": "2026-09-14 00:00:00+0000",
 	"generator": "manual",
 	"source": "editor.js",
 	"domain": "image-pin-block",
@@ -21,9 +21,6 @@
 			],
 			"(None selected)": [
 				"(未選択)"
-			],
-			"Display settings": [
-				"表示設定"
 			],
 			"Desktop behavior": [
 				"PCでの動作"
@@ -51,9 +48,6 @@
 			],
 			"Label font size (px)": [
 				"ラベルの文字サイズ(px)"
-			],
-			"Drag to resize": [
-				"ドラッグしてサイズ変更"
 			],
 			"Pin color": [
 				"ピンの色"
@@ -112,12 +106,6 @@
 			"Reset": [
 				"リセット"
 			],
-			"Select a pin on the image to preview its popover with these settings.": [
-				"画像上のピンを選択すると、この設定を反映したポップオーバーをプレビューできます。"
-			],
-			"Pin settings": [
-				"ピン設定"
-			],
 			"Label": [
 				"ラベル"
 			],
@@ -160,11 +148,29 @@
 			"Select image": [
 				"画像を選択"
 			],
-			"Add a pin here": [
-				"ここにピンを追加"
-			],
 			"Change image": [
 				"画像を変更"
+			],
+			"Edit pins": [
+				"ピンを編集"
+			],
+			"Block-wide settings": [
+				"ブロック全体の設定"
+			],
+			"Save as image": [
+				"画像として保存"
+			],
+			"Zoom (%)": [
+				"表示倍率(%)"
+			],
+			"Click the image to add a pin.": [
+				"画像をクリックしてピンを追加してください。"
+			],
+			"Add pin": [
+				"ピンを追加"
+			],
+			"Duplicate pin": [
+				"ピンを複製"
 			]
 		}
 	}
