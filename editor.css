@@ -184,3 +184,44 @@
 	font-weight: bold;
 	margin-bottom: 4px;
 }
+
+/* サイドバーの「ピンを編集」ボタン(v0.2.0でモーダル化。他の設定はすべてモーダル内へ移設)。 */
+.image-pin-block-editor__open-modal-button {
+	width: 100%;
+	justify-content: center;
+}
+
+/* 編集用モーダル(v0.2.0)本体のレイアウト。isFullScreenのため画面全体に近いサイズになる。 */
+.image-pin-block-editor__modal .components-modal__content {
+	padding: 0;
+}
+
+.image-pin-block-editor__modal .components-modal__children-container {
+	max-width: none;
+	padding: 16px 24px 24px;
+}
+
+/* 「ブロック全体の設定」内の項目を2列に並べ、項目数が多くても縦に間延びしないようにする。
+   色設定行(.image-pin-block-editor__color-row)・チェックボックス等、幅を持て余す要素は
+   2列分(grid-column: 1 / -1)で全幅にする。 */
+.image-pin-block-editor__modal-settings-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 4px 24px;
+	align-items: start;
+}
+
+.image-pin-block-editor__modal-settings-heading {
+	grid-column: 1 / -1;
+	margin: 12px 0 0;
+	padding-top: 12px;
+	border-top: 1px solid #e0e0e0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+@media ( max-width: 782px ) {
+	.image-pin-block-editor__modal-settings-grid {
+		grid-template-columns: 1fr;
+	}
+}

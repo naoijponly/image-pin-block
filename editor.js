@@ -10,6 +10,7 @@
 	var MediaUploadCheck = blockEditor.MediaUploadCheck;
 	var PanelColorSettings = blockEditor.PanelColorSettings;
 	var PanelBody = components.PanelBody;
+	var Modal = components.Modal;
 	var Button = components.Button;
 	var TextControl = components.TextControl;
 	var TextareaControl = components.TextareaControl;
@@ -47,18 +48,12 @@
 	// markerScale(%)がどんな値でも、最終的な表示幅がこれを超えないようクランプする。
 	// image-pin-block.php / view.js の同名比率と必ず一致させること。
 	var MARKER_MAX_WIDTH_RATIO = 0.5;
-	// マーカー画像のドラッグリサイズ時、表示幅(px、画面上の実サイズ)がこれより
-	// 小さくならないようにする下限。ピン本体(画像+ラベル)をドラッグで移動する操作自体が
-	// 掴めなくなるほど小さくなることを防ぐための値で、既存の丸マーカーの最小サイズ
-	// (PIN_SIZE_MIN=4px)よりは大きく、通常の操作で指先/マウスで狙いやすい大きさとして
-	// 20px を採用した(編集画面のみで使う値。フロント表示には影響しない)。
-	var MARKER_MIN_DISPLAY_WIDTH_PX = 20;
-	// リサイズハンドルの一辺の長さ(px)。マーカー画像の表示幅の40%を目安にしつつ、
-	// 「小さすぎて掴めない」(下限8px)/「マーカー画像より目立って大きい」(上限18px)の
-	// 両方を避けるようクランプする。
-	var MARKER_RESIZE_HANDLE_RATIO = 0.4;
-	var MARKER_RESIZE_HANDLE_MIN_PX = 8;
-	var MARKER_RESIZE_HANDLE_MAX_PX = 18;
+	// モーダル内の画像編集エリアの表示倍率(見た目のズームのみ。保存される値には影響しない)。
+	var MODAL_ZOOM_MIN = 50;
+	var MODAL_ZOOM_MAX = 200;
+	var MODAL_ZOOM_DEFAULT = 100;
+	// 新規ピンを複製したとき、元のピンと重ならないようにずらす量(%)。
+	var DUPLICATE_OFFSET_PERCENT = 4;
 
 	// ラベル背景の不透明度(0〜100)。デフォルト100(=変更なし)。
 	var DEFAULT_BG_OPACITY = 100;
@@ -202,10 +197,11 @@
 	// ピン内部の見た目(丸マーカー+ラベル横並び／画像マーカー+ラベル下表示)を組み立てる。
 	// 編集画面用。フロント側の見た目は image-pin-block.php 側で同じ構造を出力する。
 	// display: { pinSize, pinColor, labelBackgroundColor, labelTextColor, labelFontSize, widthRatio,
-	//            mainImageWidth, markerNaturalWidths, onMarkerImageLoad, onMarkerResizePointerDown }
-	// (ブロック単位の見た目設定)。isSelected: 画像マーカーのリサイズハンドルを表示するかどうか。
+	//            mainImageWidth, markerNaturalWidths, onMarkerImageLoad, registerMarkerImageRef }
+	// (ブロック単位の見た目設定)。registerMarkerImageRefは、モーダル内の画像編集エリアで
+	// ドラッグ移動時の範囲制限に使うDOM参照を登録するためのもの(不要な呼び出し側では省略可)。
 	// ピンのサイズ・色は丸マーカーのみに適用し、ラベルの背景色・文字色は丸マーカー・画像マーカー共通。
-	function buildPinContent( pin, display, isSelected ) {
+	function buildPinContent( pin, display ) {
 		var ratio = display.widthRatio || 1;
 		var hasLabelText = !! ( pin.label && '' !== pin.label );
 		var labelStyle = Object.assign(
@@ -258,33 +254,11 @@
 				}
 			} );
 
-			// リサイズハンドルは、選択中かつ実寸が判明している(=表示幅を計算できる)場合のみ表示する。
-			// ハンドルの大きさは表示幅の40%を目安に、8〜18pxの範囲でクランプする
-			// (小さすぎて掴めない/マーカー画像自体より目立って大きい、の両方を避けるため)。
-			var handleEl = null;
-			if ( isSelected && naturalW > 0 ) {
-				var handleSize = clampToRange( displayWidthPx * MARKER_RESIZE_HANDLE_RATIO, MARKER_RESIZE_HANDLE_MIN_PX, MARKER_RESIZE_HANDLE_MAX_PX );
-				handleEl = el( 'span', {
-					key: 'marker-resize-handle',
-					className: 'image-pin-block-editor__marker-resize-handle',
-					style: { width: handleSize + 'px', height: handleSize + 'px' },
-					title: __( 'Drag to resize', 'image-pin-block' ),
-					onPointerDown: function( evt ) {
-						evt.stopPropagation();
-						if ( display.onMarkerResizePointerDown ) {
-							display.onMarkerResizePointerDown( pin.id, evt );
-						}
-					},
-					onClick: function( evt ) { evt.stopPropagation(); }
-				} );
-			}
-
 			var children = [
 				el(
 					'span',
 					{ key: 'marker-wrap', className: 'image-pin-block-editor__marker-wrap' },
-					markerImageEl,
-					handleEl
+					markerImageEl
 				)
 			];
 			// ラベル未入力のときは代替文字を画面に出さず、画像だけを表示する
@@ -485,15 +459,13 @@
 		);
 	}
 
-	// 選択中のピンの実際のラベル/説明文を、現在の「ポップオーバー」設定(背景の不透明度・
-	// 文字色・縁取り)を適用して、キャンバス上の実画像の上に表示する。「背景を透過させたときに
-	// 実画像の上でどう見えるか」を確認する目的のため、パネル内の静的な見本ではなく、
-	// wrapper 内に実際のポップオーバーと同じ考え方で描画する(こちらはエディタ限定の表示で、
-	// render_callback の出力には一切影響しない)。
-	//
-	// 表示位置はピンの選択中は常時表示とする(丸マーカーのピン設定パネルと同じ「選択中は
-	// 表示され続ける」挙動に合わせているため、既存のピンの選択・ドラッグ移動ロジックに
-	// 一切手を加えずに済む。詳細は docs/DATA_LAYOUT.md 参照)。
+	// モーダル内で編集中のピンの実際のラベル/説明文を、現在の「ポップオーバー」設定
+	// (背景の不透明度・文字色・縁取り)を適用して、モーダル内の画像編集エリアの実画像の
+	// 上に表示する(v0.2.0でモーダル化。以前はブロック自身のキャンバスに表示していた)。
+	// 「背景を透過させたときに実画像の上でどう見えるか」を確認する目的のため、パネル内の
+	// 静的な見本ではなく、実際のポップオーバーと同じ考え方で描画する(こちらはエディタ
+	// 限定の表示で、render_callback の出力には一切影響しない)。
+	// ラベル・説明文がどちらも空のときは何も表示しない(下記参照)。
 	// ピンの%座標が画面のどちら寄りかに応じて、ポップオーバーがラベルの反対側(はみ出し
 	// にくい側)に出るよう transform の基準点を切り替える。
 	function CanvasPopoverPreview( props ) {
@@ -616,6 +588,16 @@
 		var selectedState = useState( null );
 		var selectedPinId = selectedState[ 0 ];
 		var setSelectedPinId = selectedState[ 1 ];
+
+		// v0.2.0で編集UIをモーダルに集約した。true の間、全画面モーダルを表示する
+		// (サイドバーの「ピンを編集」ボタンで開く)。
+		var isModalOpenState = useState( false );
+		var isModalOpen = isModalOpenState[ 0 ];
+		var setIsModalOpen = isModalOpenState[ 1 ];
+
+		function closeModal() {
+			setIsModalOpen( false );
+		}
 
 		// 「ここにピンを追加」メニュー。null のとき非表示。
 		// { x, y }: 追加時に使う%座標(メニューを開いた時点の値を保持する)
@@ -1096,151 +1078,23 @@
 			}
 		} );
 
+		// v0.2.0で編集UIをモーダルに集約したため、サイドバーには「ピンを編集」ボタンのみを置く。
+		// 旧「Display settings」「Pin color」「Pin label」「Popover」の各パネルは
+		// モーダル内の「ブロック全体の設定」に移設した(blockSettingsPanel参照)。
 		var inspector = el(
 			InspectorControls,
 			{},
-			el(
-				PanelBody,
-				{ title: __( 'Display settings', 'image-pin-block' ) },
-				el( SelectControl, {
-					label: __( 'Desktop behavior', 'image-pin-block' ),
-					value: attributes.pcBehavior,
-					options: [
-						{ value: 'hover-click', label: __( 'Show description on hover, click to jump', 'image-pin-block' ) },
-						{ value: 'click-link', label: __( 'Show description on click, jump via link in description', 'image-pin-block' ) }
-					],
-					onChange: function( value ) { setAttributes( { pcBehavior: value } ); }
-				} ),
-				el( SelectControl, {
-					label: __( 'Mobile behavior', 'image-pin-block' ),
-					value: attributes.mobileBehavior,
-					options: [
-						{ value: 'tap-jump', label: __( 'Tap to jump immediately', 'image-pin-block' ) },
-						{ value: 'tap-tap', label: __( 'First tap shows description, second tap jumps', 'image-pin-block' ) },
-						{ value: 'tap-link', label: __( 'Show description on tap, jump via link in description', 'image-pin-block' ) }
-					],
-					onChange: function( value ) { setAttributes( { mobileBehavior: value } ); }
-				} ),
-				el( ClampedNumberControl, {
-					label: __( 'Pin size (px, round marker only)', 'image-pin-block' ),
-					value: displaySettings.pinSize,
-					min: PIN_SIZE_MIN,
-					max: PIN_SIZE_MAX,
-					defaultValue: DEFAULT_PIN_SIZE,
-					onCommit: function( n ) {
-						setAttributes( { pinSize: n } );
-					}
-				} ),
-				el( ClampedNumberControl, {
-					label: __( 'Label font size (px)', 'image-pin-block' ),
-					value: displaySettings.labelFontSize,
-					min: LABEL_FONT_SIZE_MIN,
-					max: LABEL_FONT_SIZE_MAX,
-					defaultValue: DEFAULT_LABEL_FONT_SIZE,
-					onCommit: function( n ) {
-						setAttributes( { labelFontSize: n } );
-					}
-				} )
-			),
-			PanelColorSettings
-				? el( PanelColorSettings, {
-					title: __( 'Pin color', 'image-pin-block' ),
-					initialOpen: false,
-					colorSettings: [
-						{
-							value: displaySettings.pinColor,
-							onChange: function( color ) { setAttributes( { pinColor: color || DEFAULT_PIN_COLOR } ); },
-							label: __( 'Pin color (round marker only)', 'image-pin-block' )
-						}
-					]
-				} )
+			attributes.imageUrl
+				? el(
+					PanelBody,
+					{},
+					el( Button, {
+						variant: 'primary',
+						className: 'image-pin-block-editor__open-modal-button',
+						onClick: function() { setIsModalOpen( true ); }
+					}, __( 'Edit pins', 'image-pin-block' ) )
+				)
 				: null,
-			el(
-				PanelBody,
-				{ title: __( 'Pin label', 'image-pin-block' ), initialOpen: false },
-				el( ColorInputRow, {
-					label: __( 'Label background color', 'image-pin-block' ),
-					value: displaySettings.labelBackgroundColor,
-					// 既定値が rgba() のため、ピッカー自体でもアルファを編集できるようにする
-					// (背景の不透明度スライダーとは別に、色そのものに透明度を持たせたい場合のため)。
-					enableAlpha: true,
-					onPreview: function( color ) { setColorPreview( 'labelBackgroundColor', color ); },
-					onPreviewClear: function() { clearColorPreview( 'labelBackgroundColor' ); },
-					onCommit: function( color ) { setAttributes( { labelBackgroundColor: color || DEFAULT_LABEL_BG_COLOR } ); }
-				} ),
-				el( RangeControl, {
-					label: __( 'Label background opacity', 'image-pin-block' ),
-					value: displaySettings.labelBackgroundOpacity,
-					min: 0,
-					max: 100,
-					onChange: function( value ) {
-						setAttributes( { labelBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
-					}
-				} ),
-				el( ColorInputRow, {
-					label: __( 'Label text color', 'image-pin-block' ),
-					value: displaySettings.labelTextColor,
-					onPreview: function( color ) { setColorPreview( 'labelTextColor', color ); },
-					onPreviewClear: function() { clearColorPreview( 'labelTextColor' ); },
-					onCommit: function( color ) { setAttributes( { labelTextColor: color || DEFAULT_LABEL_TEXT_COLOR } ); }
-				} ),
-				el( ColorInputRow, {
-					label: __( 'Label stroke color', 'image-pin-block' ),
-					value: displaySettings.labelStrokeColor,
-					onPreview: function( color ) { setColorPreview( 'labelStrokeColor', color ); },
-					onPreviewClear: function() { clearColorPreview( 'labelStrokeColor' ); },
-					onCommit: function( color ) { setAttributes( { labelStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
-				} ),
-				el( SelectControl, {
-					label: __( 'Label stroke width', 'image-pin-block' ),
-					value: displaySettings.labelStrokeWidth,
-					options: STROKE_WIDTH_OPTIONS,
-					onChange: function( value ) { setAttributes( { labelStrokeWidth: value } ); }
-				} )
-			),
-			el(
-				PanelBody,
-				{ title: __( 'Popover', 'image-pin-block' ), initialOpen: false },
-				el( ColorInputRow, {
-					label: __( 'Popover background color', 'image-pin-block' ),
-					value: popoverSettings.backgroundColor,
-					allowEmpty: true,
-					onPreview: function( color ) { setColorPreview( 'popoverBackgroundColor', color ); },
-					onPreviewClear: function() { clearColorPreview( 'popoverBackgroundColor' ); },
-					onCommit: function( color ) { setAttributes( { popoverBackgroundColor: color || '' } ); }
-				} ),
-				el( RangeControl, {
-					label: __( 'Popover background opacity', 'image-pin-block' ),
-					value: popoverSettings.backgroundOpacity,
-					min: 0,
-					max: 100,
-					onChange: function( value ) {
-						setAttributes( { popoverBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
-					}
-				} ),
-				el( ColorInputRow, {
-					label: __( 'Popover text color', 'image-pin-block' ),
-					value: popoverSettings.textColor,
-					allowEmpty: true,
-					onPreview: function( color ) { setColorPreview( 'popoverTextColor', color ); },
-					onPreviewClear: function() { clearColorPreview( 'popoverTextColor' ); },
-					onCommit: function( color ) { setAttributes( { popoverTextColor: color || '' } ); }
-				} ),
-				el( ColorInputRow, {
-					label: __( 'Popover stroke color', 'image-pin-block' ),
-					value: popoverSettings.strokeColor,
-					onPreview: function( color ) { setColorPreview( 'popoverStrokeColor', color ); },
-					onPreviewClear: function() { clearColorPreview( 'popoverStrokeColor' ); },
-					onCommit: function( color ) { setAttributes( { popoverStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
-				} ),
-				el( SelectControl, {
-					label: __( 'Popover stroke width', 'image-pin-block' ),
-					value: popoverSettings.strokeWidth,
-					options: STROKE_WIDTH_OPTIONS,
-					onChange: function( value ) { setAttributes( { popoverStrokeWidth: value } ); }
-				} ),
-				el( 'p', { className: 'image-pin-block-editor__popover-preview-hint' }, __( 'Select a pin on the image to preview its popover with these settings.', 'image-pin-block' ) )
-			),
 			selectedPin
 				? el(
 					PanelBody,
@@ -1374,6 +1228,161 @@
 			);
 		}
 
+		// モーダル内「ブロック全体の設定」(折りたたみ、初期状態は閉)。ピンごとではなく
+		// ブロック全体に対する設定をまとめる。既存の属性をそのまま使い、新規属性は追加しない
+		// (旧「Display settings」「Pin color」「Pin label」「Popover」パネルの内容を統合)。
+		// 2列グリッドに収め、項目数が多くても縦に間延びしないようにする(editor.css参照)。
+		var blockSettingsPanel = el(
+			PanelBody,
+			{ title: __( 'Block-wide settings', 'image-pin-block' ), initialOpen: false },
+			el(
+				'div',
+				{ className: 'image-pin-block-editor__modal-settings-grid' },
+				el( SelectControl, {
+					label: __( 'Desktop behavior', 'image-pin-block' ),
+					value: attributes.pcBehavior,
+					options: [
+						{ value: 'hover-click', label: __( 'Show description on hover, click to jump', 'image-pin-block' ) },
+						{ value: 'click-link', label: __( 'Show description on click, jump via link in description', 'image-pin-block' ) }
+					],
+					onChange: function( value ) { setAttributes( { pcBehavior: value } ); }
+				} ),
+				el( SelectControl, {
+					label: __( 'Mobile behavior', 'image-pin-block' ),
+					value: attributes.mobileBehavior,
+					options: [
+						{ value: 'tap-jump', label: __( 'Tap to jump immediately', 'image-pin-block' ) },
+						{ value: 'tap-tap', label: __( 'First tap shows description, second tap jumps', 'image-pin-block' ) },
+						{ value: 'tap-link', label: __( 'Show description on tap, jump via link in description', 'image-pin-block' ) }
+					],
+					onChange: function( value ) { setAttributes( { mobileBehavior: value } ); }
+				} ),
+				el( ClampedNumberControl, {
+					label: __( 'Pin size (px, round marker only)', 'image-pin-block' ),
+					value: displaySettings.pinSize,
+					min: PIN_SIZE_MIN,
+					max: PIN_SIZE_MAX,
+					defaultValue: DEFAULT_PIN_SIZE,
+					onCommit: function( n ) { setAttributes( { pinSize: n } ); }
+				} ),
+				el( ClampedNumberControl, {
+					label: __( 'Label font size (px)', 'image-pin-block' ),
+					value: displaySettings.labelFontSize,
+					min: LABEL_FONT_SIZE_MIN,
+					max: LABEL_FONT_SIZE_MAX,
+					defaultValue: DEFAULT_LABEL_FONT_SIZE,
+					onCommit: function( n ) { setAttributes( { labelFontSize: n } ); }
+				} ),
+				PanelColorSettings
+					? el( PanelColorSettings, {
+						title: __( 'Pin color', 'image-pin-block' ),
+						colorSettings: [
+							{
+								value: displaySettings.pinColor,
+								onChange: function( color ) { setAttributes( { pinColor: color || DEFAULT_PIN_COLOR } ); },
+								label: __( 'Pin color (round marker only)', 'image-pin-block' )
+							}
+						]
+					} )
+					: null,
+				el(
+					MediaUploadCheck,
+					{},
+					el( MediaUpload, {
+						onSelect: handleSelectImage,
+						value: attributes.imageId,
+						allowedTypes: [ 'image/png', 'image/jpeg' ],
+						render: function( obj ) {
+							return el(
+								Button,
+								{ variant: 'secondary', onClick: obj.open },
+								__( 'Change image', 'image-pin-block' )
+							);
+						}
+					} )
+				),
+				el( 'h3', { className: 'image-pin-block-editor__modal-settings-heading' }, __( 'Pin label', 'image-pin-block' ) ),
+				el( ColorInputRow, {
+					label: __( 'Label background color', 'image-pin-block' ),
+					value: displaySettings.labelBackgroundColor,
+					// 既定値が rgba() のため、ピッカー自体でもアルファを編集できるようにする
+					// (背景の不透明度スライダーとは別に、色そのものに透明度を持たせたい場合のため)。
+					enableAlpha: true,
+					onPreview: function( color ) { setColorPreview( 'labelBackgroundColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'labelBackgroundColor' ); },
+					onCommit: function( color ) { setAttributes( { labelBackgroundColor: color || DEFAULT_LABEL_BG_COLOR } ); }
+				} ),
+				el( RangeControl, {
+					label: __( 'Label background opacity', 'image-pin-block' ),
+					value: displaySettings.labelBackgroundOpacity,
+					min: 0,
+					max: 100,
+					onChange: function( value ) {
+						setAttributes( { labelBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
+					}
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Label text color', 'image-pin-block' ),
+					value: displaySettings.labelTextColor,
+					onPreview: function( color ) { setColorPreview( 'labelTextColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'labelTextColor' ); },
+					onCommit: function( color ) { setAttributes( { labelTextColor: color || DEFAULT_LABEL_TEXT_COLOR } ); }
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Label stroke color', 'image-pin-block' ),
+					value: displaySettings.labelStrokeColor,
+					onPreview: function( color ) { setColorPreview( 'labelStrokeColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'labelStrokeColor' ); },
+					onCommit: function( color ) { setAttributes( { labelStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
+				} ),
+				el( SelectControl, {
+					label: __( 'Label stroke width', 'image-pin-block' ),
+					value: displaySettings.labelStrokeWidth,
+					options: STROKE_WIDTH_OPTIONS,
+					onChange: function( value ) { setAttributes( { labelStrokeWidth: value } ); }
+				} ),
+				el( 'h3', { className: 'image-pin-block-editor__modal-settings-heading' }, __( 'Popover', 'image-pin-block' ) ),
+				el( ColorInputRow, {
+					label: __( 'Popover background color', 'image-pin-block' ),
+					value: popoverSettings.backgroundColor,
+					allowEmpty: true,
+					onPreview: function( color ) { setColorPreview( 'popoverBackgroundColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'popoverBackgroundColor' ); },
+					onCommit: function( color ) { setAttributes( { popoverBackgroundColor: color || '' } ); }
+				} ),
+				el( RangeControl, {
+					label: __( 'Popover background opacity', 'image-pin-block' ),
+					value: popoverSettings.backgroundOpacity,
+					min: 0,
+					max: 100,
+					onChange: function( value ) {
+						setAttributes( { popoverBackgroundOpacity: ( typeof value === 'number' ) ? value : DEFAULT_BG_OPACITY } );
+					}
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Popover text color', 'image-pin-block' ),
+					value: popoverSettings.textColor,
+					allowEmpty: true,
+					onPreview: function( color ) { setColorPreview( 'popoverTextColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'popoverTextColor' ); },
+					onCommit: function( color ) { setAttributes( { popoverTextColor: color || '' } ); }
+				} ),
+				el( ColorInputRow, {
+					label: __( 'Popover stroke color', 'image-pin-block' ),
+					value: popoverSettings.strokeColor,
+					onPreview: function( color ) { setColorPreview( 'popoverStrokeColor', color ); },
+					onPreviewClear: function() { clearColorPreview( 'popoverStrokeColor' ); },
+					onCommit: function( color ) { setAttributes( { popoverStrokeColor: color || DEFAULT_STROKE_COLOR } ); }
+				} ),
+				el( SelectControl, {
+					label: __( 'Popover stroke width', 'image-pin-block' ),
+					value: popoverSettings.strokeWidth,
+					options: STROKE_WIDTH_OPTIONS,
+					onChange: function( value ) { setAttributes( { popoverStrokeWidth: value } ); }
+				} )
+			)
+		);
+
 		// キャンバス表示(ピンのラベル・ポップオーバープレビュー)専用の見た目設定。
 		// ドラッグ中はライブプレビュー値を、それ以外は確定済みの値を使う。
 		// displaySettings/popoverSettings 自体(ColorInputRowのスウォッチ・
@@ -1444,10 +1453,31 @@
 			? el( CanvasPopoverPreview, { pin: selectedPin, popoverSettings: canvasPopoverSettings } )
 			: null;
 
+		// 編集用モーダル(v0.2.0)。「画像として保存」はヘッダーに場所だけ用意し、
+		// 機能は別フェーズで実装する(現時点では無効ボタン)。
+		// isFullScreen: true で画面全体に近いサイズにする。
+		var modalElement = isModalOpen
+			? el(
+				Modal,
+				{
+					title: __( 'Edit pins', 'image-pin-block' ),
+					onRequestClose: closeModal,
+					isFullScreen: true,
+					className: 'image-pin-block-editor__modal',
+					headerActions: el( Button, {
+						variant: 'secondary',
+						disabled: true
+					}, __( 'Save as image', 'image-pin-block' ) )
+				},
+				blockSettingsPanel
+			)
+			: null;
+
 		return el(
 			'div',
 			blockProps,
 			inspector,
+			modalElement,
 			el(
 				'div',
 				{
