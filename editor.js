@@ -812,7 +812,19 @@
 
 		return el(
 			'div',
-			{ className: 'image-pin-block-editor__canvas-popover', style: boxStyle, ref: popoverRef },
+			{
+				className: 'image-pin-block-editor__canvas-popover',
+				style: boxStyle,
+				// popoverRef: 自分自身の位置計算(上記useLayoutEffect)専用。
+				// props.outerRef: 呼び出し側(Edit)がPopoverの矩形をダブルクリック判定
+				// に使うための追加ref(260920〜。表示・位置計算ロジック自体には影響しない)。
+				ref: function( node ) {
+					popoverRef.current = node;
+					if ( props.outerRef ) {
+						props.outerRef.current = node;
+					}
+				}
+			},
 			el( 'div', { className: 'image-pin-block-editor__canvas-popover-body' }, pin.description || '' )
 		);
 	}
@@ -1285,6 +1297,16 @@
 		// (React合成イベントのonWheelはpassive化されることがあり、preventDefault()が
 		// 効かない場合があるため)。
 		var modalPreviewViewportRef = useRef( null );
+		// pendingMenuRef: 「ここにピンを追加」確認メニューのDOM要素(260920〜)。
+		// メニュー表示中に、メニュー自身以外の場所がpointerdownされたら閉じる
+		// (outside click dismiss)ための判定に使う。
+		var pendingMenuRef = useRef( null );
+		// openPopoverElRef: 現在開いているPopoverのDOM要素(260920〜)。Popoverは
+		// pointer-events: none のため、その見た目の上でダブルクリックすると背後の
+		// Preview viewportへdblclickが素通りしてしまう。「ここにピンを追加」の
+		// 誤表示を防ぐため、handleViewportDoubleClick側でこの矩形内かどうかを判定する
+		// (Popover自体の表示・操作設計は変更しない)。
+		var openPopoverElRef = useRef( null );
 
 		// Preview viewport自体の実サイズ(px)。利用可能な領域(host)へ、
 		// MODAL_PREVIEW_ASPECT_RATIO(16:9)を最大containしたサイズ。
@@ -1457,6 +1479,35 @@
 			};
 		}, [ isModalOpen ] );
 
+		// 「ここにピンを追加」確認メニュー表示中、メニュー自身以外の場所がpointerdown
+		// されたら閉じる(260920〜。対象: 画像の別の空き部分・Pin・Marker・Label・
+		// Previewの別位置・右側設定欄・＋ボタン・その他Editor UI)。selectedPinIdには
+		// 一切触れない(pendingMenuを閉じることと選択状態を変えることは別の関心事。
+		// 画像の空き部分を単クリックした場合の選択解除は、既存どおり
+		// handleViewportPointerDown側で個別に行う)。
+		// capture フェーズ(第3引数 true)で登録することで、各要素が個別に持つ
+		// onPointerDown の stopPropagation() の影響を受けずに、確実にこの判定を先に
+		// 実行できるようにしている(bubbleフェーズだと、Pin/Marker/Label等の
+		// stopPropagationでdocumentまで届かなくなってしまう)。
+		useEffect( function() {
+			if ( ! isModalOpen || pendingMenu === null ) {
+				return;
+			}
+
+			function handleDocPointerDown( evt ) {
+				var menuEl = pendingMenuRef.current;
+				if ( menuEl && menuEl.contains( evt.target ) ) {
+					return;
+				}
+				setPendingMenu( null );
+			}
+
+			document.addEventListener( 'pointerdown', handleDocPointerDown, true );
+			return function() {
+				document.removeEventListener( 'pointerdown', handleDocPointerDown, true );
+			};
+		}, [ isModalOpen, pendingMenu ] );
+
 		// マーカー画像の実寸(naturalWidth、px)をピンIDごとにキャッシュする。
 		// <img> の読み込み完了(onLoad)時に記録し、buildPinVisualOnly() が上限クランプの
 		// 計算に使う(MARKER_MAX_WIDTH_RATIO 参照)。
@@ -1578,6 +1629,14 @@
 		function handleLabelDragPointerDown( pinId, evt ) {
 			evt.stopPropagation();
 			evt.preventDefault();
+			// Labelクリックも、そのLabelが属するPinをクリックしたのと同じ扱いにする
+			// (260920〜。非selectedなPinのLabelは選択のみ、既にselectedなPinのLabelは
+			// 再クリックでPopover toggle)。Label drag自体(labelPositionの更新)は
+			// この判定と無関係に、常にこれまでどおりpointer移動へ1px単位で追従させる。
+			var wasSelectedAtStart = ( selectedPinId === pinId );
+			var startClientX = evt.clientX;
+			var startClientY = evt.clientY;
+			var movedForPopover = false;
 			setPendingMenu( null );
 			setSelectedPinId( pinId );
 
@@ -1615,6 +1674,15 @@
 					return;
 				}
 				moveEvt.stopPropagation();
+
+				if ( ! movedForPopover ) {
+					var dx0 = moveEvt.clientX - startClientX;
+					var dy0 = moveEvt.clientY - startClientY;
+					if ( Math.sqrt( dx0 * dx0 + dy0 * dy0 ) >= PAN_CLICK_THRESHOLD_PX ) {
+						movedForPopover = true;
+					}
+				}
+
 				if ( zoomScale <= 0 ) {
 					return;
 				}
@@ -1648,6 +1716,17 @@
 				labelEl.removeEventListener( 'pointermove', handleMove );
 				labelEl.removeEventListener( 'pointerup', endDrag );
 				labelEl.removeEventListener( 'pointercancel', endDrag );
+
+				// Pin/Markerと同じtoggleルール(handleModalPinPointerDown参照)。
+				if ( ! movedForPopover && endEvt && endEvt.type !== 'pointercancel' ) {
+					if ( wasSelectedAtStart ) {
+						setOpenPopoverPinId( function( prev ) {
+							return ( prev === pinId ) ? null : pinId;
+						} );
+					} else {
+						setOpenPopoverPinId( null );
+					}
+				}
 			}
 
 			labelEl.addEventListener( 'pointermove', handleMove );
@@ -1763,6 +1842,8 @@
 			};
 			updatePins( pins.concat( [ newPin ] ) );
 			setSelectedPinId( newPin.id );
+			// 新規作成したピンのPopoverは開かない(念のための明示。260920〜)。
+			setOpenPopoverPinId( null );
 		}
 
 		// モーダル内、Preview viewport(画像・黒いletterbox部分の両方を含む)での
@@ -1855,6 +1936,14 @@
 			if ( ! wrapperEl ) {
 				return;
 			}
+			// Popoverは pointer-events: none のため、その見た目の上でダブルクリック
+			// すると背後のこのハンドラへdblclickが素通りしてしまう。開いているPopoverの
+			// 矩形内であれば「ここにピンを追加」を出さずに無視する(260920〜。Popover自体の
+			// 表示・操作設計・pointer-eventsの指定は変更しない、最小限のguard)。
+			var openPopoverEl = openPopoverElRef.current;
+			if ( openPopoverEl && isPointInsideRect( evt.clientX, evt.clientY, openPopoverEl.getBoundingClientRect() ) ) {
+				return;
+			}
 			var imageRect = wrapperEl.getBoundingClientRect();
 			if ( ! isPointInsideRect( evt.clientX, evt.clientY, imageRect ) ) {
 				return;
@@ -1904,6 +1993,9 @@
 			} );
 			updatePins( pins.concat( [ newPin ] ) );
 			setSelectedPinId( newPin.id );
+			// 複製元のPopoverが開いていた場合に備え、複製後のピンのPopoverは
+			// 自動で開かない(260920〜。選択とPopover open stateの分離を徹底する)。
+			setOpenPopoverPinId( null );
 		}
 
 		// モーダル内、画像編集エリアでのピンのドラッグ移動。ポインタダウンした時点でそのピンを
@@ -1919,6 +2011,11 @@
 		function handleModalPinPointerDown( pinId, evt ) {
 			evt.stopPropagation();
 			evt.preventDefault();
+			// このPin/Markerが、この操作が始まる前から既にselected状態だったかどうか
+			// (260920〜)。Popover toggleの可否はこれで決める(下記endDrag参照。
+			// setSelectedPinIdを呼んだ後でも、このクロージャ内のselectedPinId自体は
+			// 今回のrenderの値のまま変わらないため、ここで読んでも下で読んでも同じ)。
+			var wasSelectedAtStart = ( selectedPinId === pinId );
 			setPendingMenu( null );
 			setSelectedPinId( pinId );
 
@@ -2025,12 +2122,19 @@
 				setSelectedPinId( pinId );
 
 				// ドラッグ(movedForPopover)でもpointercancel(座標が信頼できない中断)でも
-				// なく、クリックとして完了した場合のみPopoverをtoggleする。pointerdown
+				// なく、クリックとして完了した場合のみPopoverの状態を変える。pointerdown
 				// 自体ではtoggleしない(ドラッグのたびにPopoverが開閉してしまうため)。
+				// 260920〜: 「非selectedだったPinの1回目クリックは選択のみ(Popoverは
+				// 閉じる)、既にselectedだったPinの再クリックだけがPopoverをtoggleする」
+				// という仕様に変更(以前はselected済みかどうかを問わず常にtoggleしていた)。
 				if ( ! movedForPopover && endEvt && endEvt.type !== 'pointercancel' ) {
-					setOpenPopoverPinId( function( prev ) {
-						return ( prev === pinId ) ? null : pinId;
-					} );
+					if ( wasSelectedAtStart ) {
+						setOpenPopoverPinId( function( prev ) {
+							return ( prev === pinId ) ? null : pinId;
+						} );
+					} else {
+						setOpenPopoverPinId( null );
+					}
 				}
 			}
 
@@ -2183,10 +2287,10 @@
 		}
 
 		// 選択中のピンを削除する。作業を継続しやすいよう、削除後は次のピンを自動選択する
-		// (260919〜。削除前のindex位置に残っているピンがあればそれ=「次のピン」、
-		// 無ければひとつ前のピン、1件も残らなければ未選択)。自動選択してもPopoverは
-		// 開かない(選択とPopover open stateは独立した別概念のため)。削除したピンの
-		// Popoverが開いていた場合のみ明示的に閉じる。
+		// (削除前のindex位置に残っているピンがあればそれ=「次のピン」、無ければひとつ前の
+		// ピン、1件も残らなければ未選択)。260920〜: 削除操作を行った場合は常にPopoverを
+		// 閉じる(削除したピンのPopoverが開いていたかどうかは問わない)。自動選択された
+		// 次/前のピンのPopoverを勝手に開くこともしない。
 		function removeSelectedPin() {
 			var ids = pins.map( function( p ) { return p.id; } );
 			var index = ids.indexOf( selectedPinId );
@@ -2194,7 +2298,6 @@
 				return;
 			}
 			var nextPins = pins.filter( function( p ) { return p.id !== selectedPinId; } );
-			var wasOpenPopover = ( openPopoverPinId === selectedPinId );
 			updatePins( nextPins );
 			var nextSelectedId = null;
 			if ( nextPins.length > 0 ) {
@@ -2202,9 +2305,7 @@
 				nextSelectedId = nextPins[ nextIndex ].id;
 			}
 			setSelectedPinId( nextSelectedId );
-			if ( wasOpenPopover ) {
-				setOpenPopoverPinId( null );
-			}
+			setOpenPopoverPinId( null );
 		}
 
 		var selectedPin = null;
@@ -2579,7 +2680,8 @@
 				popoverSettings: modalPopoverSettings,
 				ratio: modalFitRatio,
 				wrapperRef: modalWrapperRef,
-				zoomScale: modalZoom / 100
+				zoomScale: modalZoom / 100,
+				outerRef: openPopoverElRef
 			} )
 			: null;
 
@@ -2601,6 +2703,7 @@
 			? el(
 				'div',
 				{
+					ref: pendingMenuRef,
 					className: 'image-pin-block-editor__pending-menu',
 					style: { left: pendingMenu.left + 'px', top: pendingMenu.top + 'px' },
 					onPointerDown: function( evt ) { evt.stopPropagation(); },
@@ -2663,6 +2766,12 @@
 		// 「ピン一覧」カード: 常に1行固定(折り返さない)。ピンの数が多い場合は
 		// タブ部分だけが横方向にoverflow(横スクロール)し、「複製」「削除」は右側に
 		// 固定表示する(タブ数によってPreviewの高さが変わらないようにするため)。
+		// 「＋(Add pin)」ボタンは、ピンの数が多いときに横スクロールする
+		// pin-tabs-scroll の中には置かず、常に見える独立した兄弟要素にする
+		// (260920〜。以前はスクロールする行の最後の項目だったため、ピンの数が
+		// 多いと横スクロールしないと押せなくなっていた。「複製」「削除」ボタン
+		// (pin-tab-actions)が既にこのカードの中で常時固定表示になっているのと
+		// 同じ考え方を踏襲しただけで、新しいCSSのposition:sticky等は使わない)。
 		var pinListCard = el(
 			'div',
 			{ className: 'image-pin-block-editor__pin-list-card' },
@@ -2676,19 +2785,26 @@
 							key: pin.id,
 							variant: ( pin.id === selectedPinId ) ? 'primary' : 'secondary',
 							className: 'image-pin-block-editor__pin-tab',
-							onClick: function() { setPendingMenu( null ); setSelectedPinId( pin.id ); }
+							onClick: function() {
+								setPendingMenu( null );
+								setSelectedPinId( pin.id );
+								// 右側(ピン一覧)からの選択ではPopoverを自動で開かない。
+								// 別のPinのPopoverが開いたままだと選択中ピンと矛盾して
+								// 見えるため、ここでも明示的に閉じる(260920〜)。
+								setOpenPopoverPinId( null );
+							}
 						},
 						pin.label || ( __( 'Pin', 'image-pin-block' ) + ' ' + ( index + 1 ) )
 					);
-				} ),
-				el( Button, {
-					variant: 'secondary',
-					icon: 'plus',
-					label: __( 'Add pin', 'image-pin-block' ),
-					className: 'image-pin-block-editor__pin-tab-add',
-					onClick: addPinAtCenter
 				} )
 			),
+			el( Button, {
+				variant: 'secondary',
+				icon: 'plus',
+				label: __( 'Add pin', 'image-pin-block' ),
+				className: 'image-pin-block-editor__pin-tab-add',
+				onClick: addPinAtCenter
+			} ),
 			el(
 				'div',
 				{ className: 'image-pin-block-editor__pin-tab-actions' },
