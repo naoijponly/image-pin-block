@@ -2843,11 +2843,26 @@
 						setModalZoom( ( typeof value === 'number' ) ? value : MODAL_ZOOM_DEFAULT );
 					}
 				} ),
-				el( Button, {
-					variant: 'secondary',
-					className: 'image-pin-block-editor__fit-button',
-					onClick: resetToFit
-				}, __( 'Show entire image', 'image-pin-block' ) )
+				// 「画像として保存」の直下に「全体を表示する」を並べる(260915〜。
+				// 以前は「画像として保存」がModalヘッダーにあったが、Preview全体に
+				// 対する補助操作として近い位置へまとめた。配置(表示順含む)だけの
+				// 変更であり、resetToFit()/handleSaveAsImage()自体の処理内容は
+				// 変更していない)。
+				el(
+					'div',
+					{ className: 'image-pin-block-editor__fit-save-actions' },
+					el( Button, {
+						variant: 'secondary',
+						className: 'image-pin-block-editor__save-as-image-button',
+						disabled: ! attributes.imageUrl,
+						onClick: handleSaveAsImage
+					}, __( 'Save as image', 'image-pin-block' ) ),
+					el( Button, {
+						variant: 'secondary',
+						className: 'image-pin-block-editor__fit-button',
+						onClick: resetToFit
+					}, __( 'Show entire image', 'image-pin-block' ) )
+				)
 			),
 			modalImageArea,
 			pinListCard
@@ -3008,9 +3023,10 @@
 
 		// 編集用モーダル(v0.2.0)。isFullScreen: true でWordPress標準のページ占有型
 		// 編集画面にする(独自のposition: fixed疑似モーダルへは置き換えない)。
-		// 「画像として保存」はヘッダーに場所だけ用意し、機能は別フェーズで実装する
-		// (現時点では無効ボタン)。「ブロック全体の設定」ボタンは、画面が狭いときだけ
-		// CSSで表示され、右側のDrawerを開閉する(デスクトップでは常設のため不要)。
+		// ヘッダーには「ブロック全体の設定」(画面が狭いときだけCSSで表示され、右側の
+		// Drawerを開閉する。デスクトップでは常設のため不要)と「編集を反映して終了」
+		// (closeModalを直接呼ぶ、明示的な終了導線。右上×と処理は同じ)を置く。
+		// 「画像として保存」はズーム行(「全体を表示する」の直下)へ移設した(260915〜)。
 		var modalElement = isModalOpen
 			? el(
 				Modal,
@@ -3036,12 +3052,18 @@
 							className: 'image-pin-block-editor__modal-settings-toggle',
 							onClick: function() { setIsSettingsDrawerOpen( function( prev ) { return ! prev; } ); }
 						}, __( 'Block-wide settings', 'image-pin-block' ) ),
+						// 「編集を反映して終了」: Fullscreen Editorの明示的な終了導線(260915〜)。
+						// 内部処理は右上×と完全に同じclose処理(closeModal)を再利用する
+						// (新しい保存方式は作らない。×をキャンセル扱いにも変更しない)。
+						// 文言は「反映」(=block attributesへの反映)であり、「保存」ではない
+						// (投稿自体のサーバー保存はWordPress本体の更新/公開/下書き保存で
+						// 行われるため、このボタンだけで投稿全体が保存されたと誤解させない
+						// ため)。
 						el( Button, {
-							key: 'save-as-image',
-							variant: 'secondary',
-							disabled: ! attributes.imageUrl,
-							onClick: handleSaveAsImage
-						}, __( 'Save as image', 'image-pin-block' ) )
+							key: 'apply-and-close',
+							variant: 'primary',
+							onClick: closeModal
+						}, __( 'Apply changes and close', 'image-pin-block' ) )
 					]
 				},
 				el(

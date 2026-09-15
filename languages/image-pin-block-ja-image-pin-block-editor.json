@@ -204,6 +204,9 @@
 			],
 			"Drag to resize": [
 				"ドラッグしてサイズ変更"
+			],
+			"Apply changes and close": [
+				"編集を反映して終了"
 			]
 		}
 	}

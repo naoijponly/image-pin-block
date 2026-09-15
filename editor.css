@@ -212,9 +212,20 @@
 	min-width: 0;
 }
 
-.image-pin-block-editor__fit-button {
+/* 「全体を表示する」＋「画像として保存」を縦に並べる(260915〜)。zoom-row
+   (align-items: flex-end)の中で、RangeControlのラベル分の高さと揃えるため
+   margin-bottomはこの外側のラップ要素へ持たせ、中の各ボタン自体には付けない。 */
+.image-pin-block-editor__fit-save-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
 	flex: 0 0 auto;
 	margin-bottom: 8px;
+}
+
+.image-pin-block-editor__fit-button,
+.image-pin-block-editor__save-as-image-button {
+	flex: 0 0 auto;
 	white-space: nowrap;
 }
 
