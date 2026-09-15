@@ -584,40 +584,59 @@
 	// ColorPicker の onChange はドラッグ中(グラデーション/色相バーの操作中)に高頻度で
 	// 発火する。これを毎回 setAttributes に伝えると、ドラッグ1回で undo 履歴が
 	// 100件以上積まれ、Ctrl+Z が実質使えなくなる。そのため setAttributes は
-	// 「適用」ボタンを押した時点に1回だけ呼ぶ(操作中はプレビューのみ更新する)。
+	// 「適用」ボタンを押した時点に1回だけ呼ぶ(操作中はプレビューのみ更新する。ここは
+	// 変更していない)。
 	//
-	// ColorPicker 自身の color プロパティには、確定済みの値(props.value)だけを渡し、
-	// 操作中は一切変更しない。ColorPicker は内部で自身の操作状態を保持して
-	// 滑らかに追従するため、外側から色を追従させ直す必要はない。
-	// (経緯: @wordpress/components の ColorPicker(react-colorful ベース)は、
-	// 内部の useColorManipulation フックが持つ2つの useEffect が、キャッシュと
-	// hsva ステートの更新タイミングの食い違いにより、外部から色を再注入していなくても
-	// 自己完結した値の往復を起こしうる不具合がある。setAttributes を「適用」ボタン
-	// クリック時の1回に絞ることで、color プロパティ自体が操作中に変化しなくなるため、
-	// この不具合の発生条件(繰り返しの外部からの色変更)が生じなくなる。詳細は
-	// docs/DATA_LAYOUT.md の「カラーピッカーの往復不具合」参照)
+	// 260916〜: ColorPicker の color プロパティは、コンポーネント内部の useState
+	// (draft、下記)を渡す。以前は確定済みの props.value を渡したまま操作中は一切
+	// 更新しない実装だったが、これだと react-colorful ベースの ColorPicker 内部の
+	// Hex/RGB/HSL入力欄や色相バーの表示が、外部から受け取る color プロパティを
+	// 唯一の正として描画されるため、ドラッグ中に latestValueRef(useRef)を更新する
+	// だけでは再レンダリングが起きず、これらの表示が最後に「適用」した色のまま固まって
+	// 見える(グラデーション領域・色相バーを操作しても選択色やHexが追従しない)不具合が
+	// あった。draft を useState にして handleChange のたびに setDraft することで、
+	// ColorPicker自身に「今まさに操作している色」を即座に返す形にし、Hex/色相バー等
+	// 内部UI同士の同期を成立させる。
 	//
-	// 操作中の値は onPreview で都度報告し(setAttributesは呼ばない)、キャンバス上の
-	// ライブプレビューにのみ反映する。「適用」ボタンでonCommitを呼んで確定し、
-	// Dropdownを閉じる。「閉じる」ボタンはonCommitを呼ばずDropdownを閉じるだけで、
-	// 未適用の変更は破棄される(呼び出し側のonClose経由でプレビューも確定値へ戻る。
+	// これは以前(5c08a50より前)にあった「往復不具合」(onChange→setAttributes→
+	// 親の再レンダリング→新しい props.value がColorPickerへ戻る、という
+	// setAttributes経由の非同期ラウンドトリップにより、ドラッグ中に表示が一瞬前の値へ
+	// 巻き戻って見える)とは別の経路である点に注意。今回の draft はこのコンポーネント
+	// 内で完結するローカル state であり、setAttributes(Reduxのblock attributes更新)
+	// を一切経由しない。setAttributesは引き続き「適用」ボタン押下時の1回だけ
+	// (handleApply)であり、ドラッグ中にonChangeのたびに走ることはない。draft自体は
+	// Dropdownが開くたびに(=ColorPickerFieldが再マウントされるたびに)props.valueで
+	// 初期化し直されるだけで、既存のsetAttributes呼び出し回数・Undo履歴の増え方には
+	// 一切影響しない。詳細な経緯はdocs/DATA_LAYOUT.mdの「カラーピッカーの往復不具合」
+	// 参照。
+	//
+	// 操作中の値は onPreview でも都度報告し(setAttributesは呼ばない)、キャンバス上の
+	// ライブプレビューにも反映する(この経路は変更していない)。「適用」ボタンで
+	// onCommitを呼んで確定し、Dropdownを閉じる。「閉じる」ボタンはonCommitを呼ばず
+	// Dropdownを閉じるだけで、未適用の変更(draft)はコンポーネントごとアンマウントされて
+	// 破棄される(呼び出し側のonClose経由でキャンバス側のプレビューも確定値へ戻る。
 	// ColorInputRow参照)。
 	function ColorPickerField( props ) {
-		// 「適用」時にコミットすべき最新値。onChangeのたびに更新するが、再レンダリングは
-		// 起こさない(setStateではなくrefにする理由: これ自体はUIに表示する値ではなく、
-		// 適用時に読み出すためだけの値のため)。
-		var latestValueRef = useRef( props.value );
+		// 操作中の色(ドラフト)。ColorPicker自身のcolorプロパティにそのまま渡すことで、
+		// Hex/RGB/HSL入力欄・色相バー等、ColorPicker内部の全UIがこの値へ即座に同期する。
+		// Dropdownが開くたび(=マウント時)にprops.valueで初期化し、以降は
+		// handleChange経由でのみ更新する(props.valueの変化を追従し直すことはしない。
+		// Dropdownを開いたまま外部から値が変わるケース(Undo等)は無いため、5c08a50時点
+		// と同じ前提)。
+		var draftState = useState( props.value );
+		var draft = draftState[ 0 ];
+		var setDraft = draftState[ 1 ];
 
 		function handleChange( color ) {
-			latestValueRef.current = color;
+			setDraft( color );
 			if ( props.onPreview ) {
 				props.onPreview( color );
 			}
 		}
 
 		function handleApply() {
-			if ( latestValueRef.current !== props.value && props.onCommit ) {
-				props.onCommit( latestValueRef.current );
+			if ( draft !== props.value && props.onCommit ) {
+				props.onCommit( draft );
 			}
 			if ( props.onRequestClose ) {
 				props.onRequestClose();
@@ -634,7 +653,7 @@
 			'div',
 			{ className: 'image-pin-block-editor__color-picker-commit-wrap' },
 			el( ColorPicker, {
-				color: props.value || undefined,
+				color: draft || undefined,
 				onChange: handleChange,
 				enableAlpha: !! props.enableAlpha
 			} ),
@@ -2509,6 +2528,14 @@
 					label: __( 'Popover background color', 'image-pin-block' ),
 					value: popoverSettings.backgroundColor,
 					allowEmpty: true,
+					// ラベル背景色と同じくColorPicker自体でもAlphaを編集できるようにする
+					// (260916〜。背景の不透明度スライダー(popoverBackgroundOpacity)とは
+					// 別に、色そのものに透明度を持たせたい場合のため。PHP側の
+					// image_pin_block_sanitize_color()は既にhex4/hex8/rgba/hsla等の
+					// Alpha付き値を受け付け、image_pin_block_apply_opacity()もcolor-mix()
+					// で「色自体のAlpha × 不透明度スライダー」を正しく合成できることを
+					// 確認済みのため、PHP/view.js/CSS側の変更は不要だった)。
+					enableAlpha: true,
 					onPreview: function( color ) { setColorPreview( 'popoverBackgroundColor', color ); },
 					onPreviewClear: function() { clearColorPreview( 'popoverBackgroundColor' ); },
 					onCommit: function( color ) { setAttributes( { popoverBackgroundColor: color || '' } ); }
