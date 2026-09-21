@@ -4,7 +4,7 @@ Tags: gutenberg, block, image, pin, hotspot
 Requires at least: TODO(要確認: 実テストしたWordPressの最小バージョンを確認してから設定してください)
 Tested up to: TODO(要確認: 実テストしたWordPressの最大バージョンを確認してから設定してください)
 Requires PHP: TODO(要確認: 実テストしたPHPの最小バージョンを確認してから設定してください)
-Stable tag: 0.2.0
+Stable tag: 0.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -62,6 +62,14 @@ PNG / JPEG に対応しています。SVGは対応していません。
 
 詳細は同梱の `CHANGELOG.md` を参照してください。
 
+= 0.3.0 =
+* 通常Preview・Fullscreen Editor・Frontend・Lightbox・PNG保存の描画を、共通のSVG Scene Rendererへ統一
+* 保存済みのピンデータ形式を変えず、Popoverの表示・操作・文字折り返しに関する回帰を修正
+* 画像高を超える長文Popoverを、画像内でホイールスクロールできるよう修正
+* 同一サイトのhttp画像URLがHTTPSページ上でPNG保存に失敗する場合がある問題を修正
+* 吹き出しの先端のサイズを、LabelとPopoverそれぞれ大・中・小から選べるように追加(既定は中で従来と同じ)
+* 画像マーカーのリサイズハンドルを右下隅の青い丸に修正
+
 = 0.2.0 =
 * ピンの編集操作を専用のフルスクリーン編集画面(Fullscreen Editor)に集約
 * ラベルのドラッグ配置、PNG画像としての書き出しに対応
@@ -73,6 +81,9 @@ PNG / JPEG に対応しています。SVGは対応していません。
 * 詳細は `CHANGELOG.md` を参照してください
 
 == Upgrade Notice ==
+
+= 0.3.0 =
+描画処理を共通のSVG Scene Rendererへ統一しました。保存済みのピンデータ形式は変更していません。
 
 = 0.2.0 =
 ピン編集の操作方法がフルスクリーン編集画面に変わりました。保存済みのピンのデータ形式は変更していません。

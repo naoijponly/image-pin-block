@@ -1,122 +1,17 @@
-.image-pin-block-editor__wrapper {
-	position: relative;
-	display: inline-block;
-	max-width: 100%;
-}
+/* 静的キャンバス(表示専用。モーダルを閉じた通常のGutenbergブロック表示)・
+   Fullscreen Editorのいずれも、Visual(丸Pin/Marker/Label/Bubble/PC Popover)は
+   svg-renderer.jsが生成する<svg>が唯一のRendererであり(21節)、このファイルには
+   Pin/Marker/Label/Popoverの見た目に関するCSSルールを一切持たない。 */
 
-/* ブロック自身のキャンバス(v0.2.0より表示専用)。クリックでの追加・選択・ドラッグは
-   すべてモーダル内(.image-pin-block-editor__modal-canvas)に移した。 */
+/* 静的キャンバス自体(Scene mount host。svg-renderer.jsが生成する<svg>を直接の子に
+   持つ)。高さは明示せず、SVGルート自身のintrinsic aspect ratio(viewBoxから決まる)に
+   任せる(style.cssの.image-pin-block__scene-hostと同じ考え方)。ダブルクリックで
+   Fullscreen Editorを開くヒントとしてcursor: zoom-inを示す。 */
 .image-pin-block-editor__wrapper--static {
-	cursor: zoom-in;
-}
-
-.image-pin-block-editor__wrapper--static .image-pin-block-editor__pin {
-	cursor: default;
-}
-
-.image-pin-block-editor__image {
-	display: block;
-	max-width: 100%;
-	height: auto;
-}
-
-.image-pin-block-editor__pin {
-	position: absolute;
-	transform: translate(-50%, -50%);
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	padding: 0;
-	border: none;
-	background: transparent;
-	cursor: grab;
-	/* ドラッグ中にブラウザのタッチスクロール/ジェスチャーに横取りされないようにする */
-	touch-action: none;
-}
-
-.image-pin-block-editor__pin:active {
-	cursor: grabbing;
-}
-
-/* サイズ・背景色は「表示設定」パネルの値がインラインstyleで指定される(JS側で必ず設定される)。 */
-.image-pin-block-editor__pin-dot {
-	display: block;
-	flex: 0 0 auto;
-	border-radius: 50%;
-	border: 2px solid #fff;
-	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-}
-
-/* pinColor はインラインstyleで指定されるため、選択中の強調は背景色ではなくリングで表現する。 */
-.image-pin-block-editor__pin.is-selected .image-pin-block-editor__pin-dot {
-	box-shadow: 0 0 0 3px #1e88e5, 0 1px 4px rgba(0, 0, 0, 0.5);
-}
-
-/* 背景色・文字色は「表示設定」パネルの値がインラインstyleで指定される。 */
-.image-pin-block-editor__pin-label {
-	font-size: 12px;
-	line-height: 1.4;
-	padding: 1px 6px;
-	border-radius: 3px;
-	white-space: nowrap;
-	pointer-events: none;
-}
-
-/* マーカー画像を設定したピン: 横並び(丸+ラベル)ではなく縦並び(画像の下にラベル)にする
-   (ブロック自身の表示専用キャンバスでのみ使用。モーダルは独立配置のLabelを使うため
-   このクラス自体の見た目には影響しない)。 */
-.image-pin-block-editor__pin.has-marker-image {
-	flex-direction: column;
-	gap: 2px;
-}
-
-/* モーダル専用: Pin/Markerの周囲へ自由に配置・ドラッグできるLabel(labelPosition参照)。
-   通常の.pin-label(pointer-events: none、flexで隣接表示)とは異なり、独立した
-   position: absoluteの兄弟要素としてドラッグ操作を受け付ける。フロント(style.css)には
-   このクラス自体が存在しないため、公開ページにドラッグ用カーソル等は一切出ない。 */
-.image-pin-block-editor__pin-label--draggable {
-	position: absolute;
-	pointer-events: auto;
-	cursor: grab;
-	touch-action: none;
-	z-index: 5;
-}
-
-.image-pin-block-editor__pin-label--draggable:active {
-	cursor: grabbing;
-}
-
-.image-pin-block-editor__pin-label--draggable.is-selected {
-	box-shadow: 0 0 0 2px #1e88e5;
-}
-
-.image-pin-block-editor__pin-marker-image {
-	display: block;
-	max-width: none;
-	width: auto;
-	height: auto;
-	pointer-events: none;
-}
-
-/* マーカー画像の位置決め用コンテナ。画像の実サイズにぴったり合わせる。 */
-.image-pin-block-editor__marker-wrap {
 	position: relative;
-	display: inline-block;
-}
-
-/* 画像マーカーのドラッグリサイズ用ハンドル(v0.1.x系から復元)。選択中のマーカー画像
-   ピンの右下にのみ表示される。 */
-.image-pin-block-editor__marker-resize-handle {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	transform: translate(50%, 50%);
-	background: #1e88e5;
-	border: 2px solid #fff;
-	border-radius: 50%;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-	cursor: nwse-resize;
-	touch-action: none;
+	display: block;
+	width: 100%;
+	cursor: zoom-in;
 }
 
 .image-pin-block-editor__marker-heading {
@@ -172,26 +67,6 @@
 	background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
 
-/* 選択中のピンのポップオーバーを、モーダル内の画像編集エリアの実画像の上に重ねて
-   表示する(CanvasPopoverPreview関数)。left/top はピンと同じ%座標、transform で
-   ピンの反対側にずらして表示する(はみ出しにくい側を JS側で計算済み)。実際の
-   .image-pin-block__popover とは別要素・別クラスだが、背景不透明度・文字色・縁取りの
-   計算ロジックは image-pin-block.php のレンダリングと同じ考え方(色+不透明度の合成、
-   太さ'none'なら縁取りを一切出力しない)を用いている。render_callback の出力には
-   一切影響しない。 */
-.image-pin-block-editor__canvas-popover {
-	position: absolute;
-	max-width: 260px;
-	border: 1px solid #ddd;
-	border-radius: 6px;
-	padding: 10px 12px;
-	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
-	font-size: 0.9em;
-	line-height: 1.6;
-	z-index: 10;
-	pointer-events: none;
-}
-
 /* Color Pickerの「適用」「閉じる」ボタン行。 */
 .image-pin-block-editor__color-picker-actions {
 	display: flex;
@@ -227,13 +102,6 @@
 .image-pin-block-editor__save-as-image-button {
 	flex: 0 0 auto;
 	white-space: nowrap;
-}
-
-/* 説明文の手動改行(Textareaで入力した\n)をそのまま見た目に反映する。長い単語・URL等で
-   popoverの幅(max-width: 260px)から極端にはみ出さないよう、単語境界に関わらず折り返す。 */
-.image-pin-block-editor__canvas-popover-body {
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
 }
 
 /* サイドバーの「ピンを編集」ボタン(v0.2.0でモーダル化。他の設定はすべてモーダル内へ移設)。 */
@@ -352,19 +220,9 @@
 	cursor: grabbing;
 }
 
-/* Pan layer: viewportいっぱいに広がり、flexで中央寄せした状態を基準位置とする。
-   実際のPan量はJS側でtransform: translate()として与える(このクラス自体には
-   transformを書かない)。 */
-.image-pin-block-editor__modal-pan-layer {
-	width: 100%;
-	height: 100%;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-}
-
-/* 「ここにピンを追加」確認メニュー。Pan layerの外(viewportの直接の子)に置くため、
-   Zoom/Panのtransformを一切受けない(常に元のサイズ・クリックした位置に表示される)。 */
+/* 「ここにピンを追加」確認メニュー。viewportの直接の子として、Camera(Zoom/Pan)の
+   影響を一切受けない(常に元のサイズ・クリックした位置に表示される。Zoom/PanはSVG
+   viewBox自身が担うため、このメニュー自体にtransformを打ち消す処理は不要)。 */
 .image-pin-block-editor__pending-menu {
 	position: absolute;
 	transform: translate(-50%, 8px);
@@ -375,13 +233,6 @@
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 	z-index: 20;
 	white-space: nowrap;
-}
-
-.image-pin-block-editor__modal-canvas .image-pin-block-editor__image {
-	display: block;
-	width: 100%;
-	height: 100%;
-	max-width: none;
 }
 
 /* 「ピン一覧」カード: 常に1行(折り返さない)。ピンの数が多い場合はタブ部分だけが

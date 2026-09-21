@@ -27,6 +27,10 @@
 		"popoverTextColor": { "type": "string", "default": "" },
 		"popoverStrokeColor": { "type": "string", "default": "#ffffff" },
 		"popoverStrokeWidth": { "type": "string", "default": "none" },
+		"labelSpeechBubble": { "type": "boolean", "default": false },
+		"popoverSpeechBubble": { "type": "boolean", "default": false },
+		"labelTailSize": { "type": "string", "default": "medium" },
+		"popoverTailSize": { "type": "string", "default": "medium" },
 		"pins": { "type": "array", "default": [] }
 	}
 }

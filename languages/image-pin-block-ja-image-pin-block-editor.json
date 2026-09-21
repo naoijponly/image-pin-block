@@ -207,6 +207,24 @@
 			],
 			"Apply changes and close": [
 				"編集を反映して終了"
+			],
+			"Add a speech bubble tail": [
+				"吹き出しの先端を付ける"
+			],
+			"Small": [
+				"小"
+			],
+			"Medium": [
+				"中"
+			],
+			"Large": [
+				"大"
+			],
+			"Label tail size": [
+				"ラベルの吹き出し先端のサイズ"
+			],
+			"Popover tail size": [
+				"ポップオーバーの吹き出し先端のサイズ"
 			]
 		}
 	}

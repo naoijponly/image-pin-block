@@ -1,10 +1,26 @@
+/**
+ * Image Pin Block — Frontend shell CSS(SVG Scene Renderer移行後)。
+ *
+ * Main Image・丸Pin・Marker・Label・Bubble・PC PopoverのVisualは、すべて
+ * svg-renderer.jsがJSで直接SVG要素へ属性・styleを設定する(単一Renderer原則。
+ * 21節)。このファイルに残るのは、JSが実際に生成・操作するSVGの外側にある
+ * shell UI(Scene mount host自体のレイアウト・拡大表示ボタン・Mobile Description
+ * Panelという別UI・Lightboxの外枠)だけであり、Pin/Marker/Label/Popoverの見た目に
+ * 関するCSSルールは(縁取り・背景色のCSSカスタムプロパティ変換ルールを含めて)
+ * 一切持たない。
+ */
+
 .image-pin-block {
 	position: relative;
 }
 
-.image-pin-block__wrapper {
-	position: relative;
+/* Scene(SVG)のmount host。svg-renderer.jsが生成する<svg>を直接の子として持つ。
+   高さは明示せず、SVGルート自身のintrinsic aspect ratio(viewBoxから決まる。
+   <img width:100%;height:auto>と同じ挙動)に任せる(レスポンシブ表示。旧
+   .image-pin-block__image{width:100%;height:auto}と同じ考え方)。 */
+.image-pin-block__scene-host {
 	display: block;
+	width: 100%;
 }
 
 .image-pin-block__zoom-btn {
@@ -30,114 +46,14 @@
 	background: rgba(0, 0, 0, 0.75);
 }
 
-.image-pin-block__image {
-	display: block;
-	width: 100%;
-	height: auto;
-}
-
-.image-pin-block__pin {
-	position: absolute;
-	transform: translate(-50%, -50%);
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	padding: 0;
-	margin: 0;
-	border: none;
-	background: transparent;
+/* 説明文中のジャンプ用リンク。PC Popover側(SVG内の本物の<a>。class="ipb-popover-link"、
+   svg-renderer.js参照)・Mobile Panel側(通常のHTML<a>、class="image-pin-block__desc-link"、
+   view.js参照)の両方に、同じ最小限の見た目(下線・pointerで示すカーソル)だけを与える。
+   文字色自体はPopover/Mobile Panelそれぞれの文字色設定にfillまたはcolorとして
+   すでに反映されているため、ここでは上書きしない。 */
+.image-pin-block__desc-link,
+.ipb-popover-link {
 	cursor: pointer;
-	touch-action: manipulation;
-}
-
-/* サイズ・背景色は「表示設定」パネルの値がインラインstyleで指定される(PHP側で必ず設定される)。 */
-.image-pin-block__pin-dot {
-	display: block;
-	flex: 0 0 auto;
-	border-radius: 50%;
-	border: 2px solid #fff;
-	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-}
-
-/* pinColor はインラインstyleで指定されるため、hover/focusの強調は背景色ではなくリングで表現する。 */
-.image-pin-block__pin:hover .image-pin-block__pin-dot,
-.image-pin-block__pin:focus-visible .image-pin-block__pin-dot {
-	box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.2), 0 1px 4px rgba(0, 0, 0, 0.4);
-}
-
-/* マーカー画像を設定したピン: 横並び(丸+ラベル)ではなく、画像の下にラベルの縦並びにする */
-.image-pin-block__pin.has-marker-image {
-	flex-direction: column;
-	gap: 2px;
-}
-
-.image-pin-block__pin-marker-image {
-	display: block;
-	max-width: none;
-	width: auto;
-	height: auto;
-	pointer-events: none;
-}
-
-/* 背景色・文字色は「表示設定」パネルの値がインラインstyleで指定される。 */
-.image-pin-block__pin-label {
-	font-size: 12px;
-	line-height: 1.4;
-	padding: 1px 6px;
-	border-radius: 3px;
-	white-space: nowrap;
-	pointer-events: none;
-	/* 縁取り(--ipb-label-stroke-width)は下の data-label-stroke-width ルールで
-	   pxに変換される。未設定時は 0px にフォールバックし、縁取りなしになる。
-	   paint-order は必ず併記すること(省略すると縁取りが字の内側に食い込み、
-	   細い書体の字形が潰れる)。 */
-	-webkit-text-stroke: var(--ipb-label-stroke-width, 0px) var(--ipb-label-stroke-color, transparent);
-	paint-order: stroke fill;
-}
-
-/* Label位置(view.jsのpositionLabelForPin参照)。JS実行後、Labelは.image-pin-block__pin
-   ボタンの外へ切り離され、.image-pin-block__wrapper直下でposition: absoluteの独立要素
-   として配置される(Pin/Markerの周囲を自由な位置(labelPosition)で回り込めるようにする
-   ため)。JS未実行時は従来どおりbutton内のflexレイアウトのまま表示される(no-JS
-   フォールバック)。left/topはJSが実測結果から都度計算して設定する。 */
-.image-pin-block__pin-label--positioned {
-	position: absolute;
-}
-
-/* 縁取りの太さ(列挙値)をpxに変換する。'none'(既定)のときは data-label-stroke-width
-   属性自体が出力されないため、上の 0px フォールバックのまま(縁取りなし)になる。 */
-.image-pin-block[data-label-stroke-width="thin"] .image-pin-block__pin-label {
-	--ipb-label-stroke-width: 1px;
-}
-
-.image-pin-block[data-label-stroke-width="normal"] .image-pin-block__pin-label {
-	--ipb-label-stroke-width: 2px;
-}
-
-.image-pin-block[data-label-stroke-width="thick"] .image-pin-block__pin-label {
-	--ipb-label-stroke-width: 3px;
-}
-
-/* 背景色・文字色・縁取りは、未設定時は既存の見た目(白背景・テーマの文字色継承・
-   縁取りなし)のままになるよう var() のフォールバックを既存値に合わせている。 */
-.image-pin-block__popover {
-	position: absolute;
-	max-width: 260px;
-	background: var(--ipb-popover-bg-color, #fff);
-	color: var(--ipb-popover-text-color, inherit);
-	border: 1px solid #ddd;
-	border-radius: 6px;
-	padding: 10px 12px;
-	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
-	z-index: 10;
-	font-size: 0.9em;
-	line-height: 1.6;
-	-webkit-text-stroke: var(--ipb-popover-stroke-width, 0px) var(--ipb-popover-stroke-color, transparent);
-	paint-order: stroke fill;
-}
-
-.image-pin-block__popover[hidden] {
-	display: none;
 }
 
 .image-pin-block__desc-link {
@@ -146,52 +62,46 @@
 	display: block;
 }
 
-/* 説明文の手動改行(Textareaで入力した\n)をそのまま見た目に反映する。PC用ポップオーバー・
-   スマホの説明エリアの両方(.image-pin-block__desc-body を共有)に適用される。長い単語・
-   URL等でpopoverの幅(max-width: 260px)から極端にはみ出さないよう、単語境界に関わらず
-   折り返す。保存データ自体は普通の文字列のまま(<br>等のHTMLは一切挿入しない)。 */
+.ipb-popover-link {
+	text-decoration: underline;
+}
+
+/* 説明文の手動改行(Textareaで入力した\n)をそのまま見た目に反映する。Mobile Panel専用
+  (PC Popover側の折り返し・改行はscene-text.jsが行レベルで確定させ、SVG<text>/<tspan>へ
+   1行ずつ描画するため、このCSSは関与しない)。長い単語・URL等で極端にはみ出さないよう、
+   単語境界に関わらず折り返す。保存データ自体は普通の文字列のまま(<br>等のHTMLは
+   一切挿入しない)。 */
 .image-pin-block__desc-body {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
 
-/* ポップオーバーと同じ4項目(背景不透明度・文字色・縁取り色・縁取り太さ)を
-   スマホの説明エリアにも適用する(PC/スマホで同じ説明内容を出し分けているだけのため)。
-   未設定時のフォールバックは、それぞれの既存デフォルト値(#f9f9f9・テーマ継承・縁取りなし)。 */
+/* Mobile Description Panel(Scene-external HTML。SVG Sceneの内側ではなく、常に
+   この独立したHTML要素として表示する別UI。29節)。背景色・文字色・縁取りは
+   view.js(applyMobilePanelStyle)がAttributesから直接inline styleとして設定する
+   (旧実装のCSSカスタムプロパティ経由の変換はPHPが値を計算しなくなったため廃止。
+   フォールバック自体は従来と同じ#f9f9f9・テーマの文字色継承のまま変更していない)。
+   デスクトップでは常にdisplay:noneのまま(下のmedia query内でのみ表示され得る。
+   常時desktop非表示は既存仕様どおり)。 */
 .image-pin-block__mobile-panel {
 	display: none;
 	margin-top: 12px;
 	padding: 12px;
 	border: 1px solid #ddd;
 	border-radius: 6px;
-	background: var(--ipb-popover-bg-color, #f9f9f9);
-	color: var(--ipb-popover-text-color, inherit);
-	-webkit-text-stroke: var(--ipb-popover-stroke-width, 0px) var(--ipb-popover-stroke-color, transparent);
-	paint-order: stroke fill;
-}
-
-.image-pin-block[data-popover-stroke-width="thin"] .image-pin-block__popover,
-.image-pin-block[data-popover-stroke-width="thin"] .image-pin-block__mobile-panel {
-	--ipb-popover-stroke-width: 1px;
-}
-
-.image-pin-block[data-popover-stroke-width="normal"] .image-pin-block__popover,
-.image-pin-block[data-popover-stroke-width="normal"] .image-pin-block__mobile-panel {
-	--ipb-popover-stroke-width: 2px;
-}
-
-.image-pin-block[data-popover-stroke-width="thick"] .image-pin-block__popover,
-.image-pin-block[data-popover-stroke-width="thick"] .image-pin-block__mobile-panel {
-	--ipb-popover-stroke-width: 3px;
 }
 
 .image-pin-block__mobile-panel[hidden] {
 	display: none;
 }
 
-/* 600px は view.js の MOBILE_BREAKPOINT と必ず一致させること */
+/* 600px は view.js の MOBILE_BREAKPOINT と必ず一致させること。 */
 @media (max-width: 600px) {
-	.image-pin-block__popover {
+	/* PC Popoverはmobile viewportでは開かれない(view.jsのisMobileViewport()ガードが
+	   先に働くため、通常この状態にはならない)。JS未実行/読み込み前の一瞬・想定外の
+	   状態への保険として、SVG内のPopover Groupも念のため隠す(data-role="popover"は
+	   svg-renderer.jsが常に付与する属性)。 */
+	.image-pin-block__scene-host [data-role="popover"] {
 		display: none !important;
 	}
 
@@ -200,7 +110,10 @@
 	}
 }
 
-/* 拡大表示(自前実装。テーマのLightboxには依存しない) */
+/* ─── 拡大表示(Lightbox)。自前実装、テーマのLightboxには依存しない ───
+   cloneNode()によるDOM複製は廃止し、Frontend本体と同じAttributes・
+   同じRenderer(svg-renderer.js)を、独立したCamera/RenderStateで新しいhostへ
+   mountするだけ(view.js参照)。Visual DOM自体は複製しない。 */
 
 body.image-pin-block__zoom-open {
 	overflow: hidden;
@@ -217,9 +130,6 @@ body.image-pin-block__zoom-open {
 .image-pin-block__zoom-stage {
 	position: absolute;
 	inset: 0;
-	display: flex;
-	align-items: center;
-	justify-content: center;
 	cursor: grab;
 	touch-action: none;
 }
@@ -228,25 +138,22 @@ body.image-pin-block__zoom-open {
 	cursor: grabbing;
 }
 
-.image-pin-block__zoom-clone.image-pin-block {
-	position: static;
+.image-pin-block__zoom-scene-host {
+	display: block;
+	width: 100%;
+	height: 100%;
 }
 
-.image-pin-block__zoom-clone .image-pin-block__wrapper {
-	will-change: transform;
-}
-
-/* 左クリックドラッグでの移動と、ブラウザ標準の画像ドラッグ(持ち出し)が競合しないようにする。
-   JS側で draggable="false" も付与しているが、こちらは保険。 */
-.image-pin-block__zoom-clone img {
+/* ブラウザ標準の画像ドラッグ(持ち出し)と、Lightbox自身の1本指ドラッグ操作が
+   競合しないようにする。 */
+.image-pin-block__zoom-scene-host img {
 	-webkit-user-drag: none;
 	user-select: none;
 }
 
-/* PC用ポップオーバーは wrapper の子要素なので、wrapper の scale()/translate() と
-   一緒に拡大・移動される。スマホ用の説明エリアは wrapper の兄弟要素で拡大対象外の
-   ため、パン位置に関わらず操作できるよう画面下端に固定表示する。 */
-.image-pin-block__zoom-clone .image-pin-block__mobile-panel {
+/* Lightbox内のMobile Panelは、Frontend本体と異なりCamera(Pan/Zoom)の対象では
+   ないため、Pan位置に関わらず操作できるよう画面下端に固定表示する。 */
+.image-pin-block__zoom-overlay .image-pin-block__mobile-panel {
 	position: fixed;
 	left: 0;
 	right: 0;
