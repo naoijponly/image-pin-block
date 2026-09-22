@@ -505,6 +505,14 @@
 		var staticHostRef = useRef( null );
 		var staticRuntimeRef = useRef( null );
 
+		// 画像未選択の間は、この静的キャンバス自体(ref付きのdiv)がJSXに存在しない
+		// (下のearly returnで別のUI(「画像を選択」ボタン)を返している)。依存配列を
+		// 空([])のままにすると、初回mount時(画像未選択でstaticHostRef.currentがまだ
+		// null)にしか実行されず、後で画像を選んでこのdivが初めて存在するようになっても
+		// 二度と実行されないため、Runtimeが永久に作られず何も描画されない(回帰: 新規
+		// ブロックに画像を選択した直後、ブロックが空白のまま表示される)。
+		// attributes.imageUrlの有無(false→true)をきっかけに再実行させることで、
+		// このdivが実際に存在するようになった時点でRuntimeを作れるようにする。
 		useEffect( function() {
 			if ( ! staticHostRef.current ) {
 				return;
@@ -515,7 +523,7 @@
 				rt.dispose();
 				staticRuntimeRef.current = null;
 			};
-		}, [] );
+		}, [ !! attributes.imageUrl ] );
 
 		useEffect( function() {
 			if ( staticRuntimeRef.current ) {
@@ -1338,7 +1346,11 @@
 					{},
 					el( MediaUpload, {
 						onSelect: handleSelectImage,
-						value: attributes.imageId,
+						// imageIdが0(旧記事等、実際の添付ファイルIDが分からない状態)のときは
+						// valueを渡さない。0を渡すと、メディアライブラリが存在しない添付ファイルID 0を
+						// 選択済みとして解決しようとし、ダイアログの状態が不安定になる(選択・
+						// アップロードが時々反映されない症状の原因になり得るため)。
+						value: attributes.imageId || undefined,
 						allowedTypes: [ 'image/png', 'image/jpeg' ],
 						render: function( obj ) {
 							return el( Button, { variant: 'secondary', onClick: obj.open }, __( 'Change image', 'image-pin-block' ) );
@@ -1632,7 +1644,8 @@
 										{},
 										el( MediaUpload, {
 											onSelect: handleSelectMarkerImage,
-											value: selectedPin.markerImageId,
+											// 上のMain画像側と同じ理由(0/未設定を選択済みとして渡さない)。
+											value: selectedPin.markerImageId || undefined,
 											allowedTypes: [ 'image/png', 'image/jpeg' ],
 											render: function( obj ) {
 												return el( Button, { variant: 'secondary', onClick: obj.open }, __( 'Change marker image', 'image-pin-block' ) );
@@ -1726,6 +1739,13 @@
 				{
 					ref: staticHostRef,
 					className: 'image-pin-block-editor__wrapper--static',
+					// Sceneの描画(SVG)は非同期(画像読み込み・フォント待ち)で少し遅れて入るため、
+					// 画像サイズが分かっている時点でその縦横比分の高さを先に確保しておく
+					// (指定が無いと、選択直後の一瞬だけ枠の高さが0になり、ブロックが消えたように
+					// 見えてしまうため。画像サイズ未確定時はeditor.css側のmin-heightに任せる)。
+					style: ( attributes.imageWidth > 0 && attributes.imageHeight > 0 )
+						? { aspectRatio: attributes.imageWidth + ' / ' + attributes.imageHeight }
+						: null,
 					onDoubleClick: handleCanvasDoubleClick
 				}
 			)

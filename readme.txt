@@ -4,7 +4,7 @@ Tags: gutenberg, block, image, pin, hotspot
 Requires at least: TODO(要確認: 実テストしたWordPressの最小バージョンを確認してから設定してください)
 Tested up to: TODO(要確認: 実テストしたWordPressの最大バージョンを確認してから設定してください)
 Requires PHP: TODO(要確認: 実テストしたPHPの最小バージョンを確認してから設定してください)
-Stable tag: 0.3.0
+Stable tag: 0.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -61,6 +61,11 @@ PNG / JPEG に対応しています。SVGは対応していません。
 == Changelog ==
 
 詳細は同梱の `CHANGELOG.md` を参照してください。
+
+= 0.3.1 =
+* 新規ブロックに画像を初めて選択したとき、通常表示が空白のままになる問題を修正(今回の主な修正)
+* ブロック名が日本語環境で「画像ピンブロック」と表示されていたのを「Image Pin Block」表記に修正
+* メディアライブラリでの画像選択が不安定になる場合がある問題、更新後にファイルが古いまま混在した場合の検知を追加
 
 = 0.3.0 =
 * 通常Preview・Fullscreen Editor・Frontend・Lightbox・PNG保存の描画を、共通のSVG Scene Rendererへ統一

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Image Pin Block
  * Description: A block that places pins on an image to show descriptions and jump to other parts of the page.
- * Version: 0.3.0
+ * Version: 0.3.1
  * Author: naoijponly
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -26,6 +26,32 @@ function image_pin_block_load_textdomain() {
 add_action( 'init', 'image_pin_block_load_textdomain', 1 );
 
 /**
+ * 全スクリプト・スタイル共通のアセット版。
+ *
+ * 複数ファイルに分かれているため、ファイルごとの更新時刻だけを版にすると、一部のファイルだけ
+ * ブラウザ・サーバーのキャッシュに古い版が残った場合に組み合わせが壊れる(片方だけ新しい
+ * 関数を呼んで描画が止まる等)。プラグインの版と全ファイルの最大更新時刻を1つにまとめて全ての
+ * アセットに使うことで、どれか1つでも更新されれば全アセットのURLが切り替わるようにする。
+ */
+function image_pin_block_asset_version() {
+	static $version = null;
+	if ( null !== $version ) {
+		return $version;
+	}
+	$dir   = __DIR__;
+	$files = array( 'geometry.js', 'scene-text.js', 'scene-assets.js', 'scene-model.js', 'scene-camera.js', 'svg-renderer.js', 'scene-runtime.js', 'png-export.js', 'editor.js', 'view.js', 'editor.css', 'style.css', 'block.json' );
+	$latest = 0;
+	foreach ( $files as $file ) {
+		$mtime = @filemtime( $dir . '/' . $file );
+		if ( $mtime && $mtime > $latest ) {
+			$latest = $mtime;
+		}
+	}
+	$version = '0.3.1.' . $latest;
+	return $version;
+}
+
+/**
  * SVG Scene Renderer移行後のスクリプト登録。
  *
  * 「Scene Core」(geometry/scene-text/scene-assets/scene-model/scene-camera/
@@ -44,42 +70,42 @@ function image_pin_block_register_block() {
 		'image-pin-block-geometry',
 		plugins_url( 'geometry.js', __FILE__ ),
 		array(),
-		filemtime( $dir . '/geometry.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_register_script(
 		'image-pin-block-scene-text',
 		plugins_url( 'scene-text.js', __FILE__ ),
 		array(),
-		filemtime( $dir . '/scene-text.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_register_script(
 		'image-pin-block-scene-assets',
 		plugins_url( 'scene-assets.js', __FILE__ ),
 		array(),
-		filemtime( $dir . '/scene-assets.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_register_script(
 		'image-pin-block-scene-model',
 		plugins_url( 'scene-model.js', __FILE__ ),
 		array( 'image-pin-block-geometry' ),
-		filemtime( $dir . '/scene-model.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_register_script(
 		'image-pin-block-scene-camera',
 		plugins_url( 'scene-camera.js', __FILE__ ),
 		array(),
-		filemtime( $dir . '/scene-camera.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_register_script(
 		'image-pin-block-svg-renderer',
 		plugins_url( 'svg-renderer.js', __FILE__ ),
 		array( 'image-pin-block-scene-text', 'image-pin-block-scene-camera', 'image-pin-block-geometry' ),
-		filemtime( $dir . '/svg-renderer.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_register_script(
@@ -93,14 +119,14 @@ function image_pin_block_register_block() {
 			'image-pin-block-scene-camera',
 			'image-pin-block-svg-renderer',
 		),
-		filemtime( $dir . '/scene-runtime.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_register_script(
 		'image-pin-block-png-export',
 		plugins_url( 'png-export.js', __FILE__ ),
 		array( 'image-pin-block-scene-assets', 'image-pin-block-scene-runtime', 'image-pin-block-svg-renderer' ),
-		filemtime( $dir . '/png-export.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 
@@ -119,7 +145,7 @@ function image_pin_block_register_block() {
 			'image-pin-block-scene-runtime',
 			'image-pin-block-png-export',
 		),
-		filemtime( $dir . '/editor.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_set_script_translations( 'image-pin-block-editor', 'image-pin-block', $dir . '/languages' );
@@ -128,20 +154,20 @@ function image_pin_block_register_block() {
 		'image-pin-block-editor-style',
 		plugins_url( 'editor.css', __FILE__ ),
 		array(),
-		filemtime( $dir . '/editor.css' )
+		image_pin_block_asset_version()
 	);
 	wp_register_style(
 		'image-pin-block-style',
 		plugins_url( 'style.css', __FILE__ ),
 		array(),
-		filemtime( $dir . '/style.css' )
+		image_pin_block_asset_version()
 	);
 
 	wp_register_script(
 		'image-pin-block-view',
 		plugins_url( 'view.js', __FILE__ ),
 		array( 'wp-i18n', 'image-pin-block-scene-runtime', 'image-pin-block-scene-camera' ),
-		filemtime( $dir . '/view.js' ),
+		image_pin_block_asset_version(),
 		true
 	);
 	wp_set_script_translations( 'image-pin-block-view', 'image-pin-block', $dir . '/languages' );

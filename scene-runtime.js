@@ -46,6 +46,50 @@
 	function( Geometry, SceneModel, SceneAssets, SceneText, SceneCamera, SvgRenderer ) {
 		'use strict';
 
+		// 依存モジュール(別ファイル)の版がずれて古いものが混ざると、片方だけ新しい関数を呼んで
+		// 描画が黙って止まる。読み込み時に必要な関数の有無を確認し、足りなければ原因が分かる
+		// メッセージをConsoleへ出す(キャッシュ・反映漏れの検出用)。
+		var REQUIRED_API = [
+			[ 'geometry.js', Geometry, [ 'resolveTailDimensions', 'buildSpeechBubblePolygon', 'computePopoverPlacement' ] ],
+			[ 'scene-model.js', SceneModel, [ 'buildSceneModel' ] ],
+			[ 'scene-assets.js', SceneAssets, [ 'createAssetStore', 'normalizeUrl' ] ],
+			[ 'scene-text.js', SceneText, [ 'layoutText' ] ],
+			[ 'scene-camera.js', SceneCamera, [ 'zoomAt' ] ],
+			[ 'svg-renderer.js', SvgRenderer, [ 'createScene' ] ]
+		];
+		var OUTDATED_FILES = REQUIRED_API.filter( function( entry ) {
+			return ! entry[ 1 ] || entry[ 2 ].some( function( name ) {
+				return 'function' !== typeof entry[ 1 ][ name ];
+			} );
+		} ).map( function( entry ) {
+			return entry[ 0 ];
+		} );
+		if ( OUTDATED_FILES.length && 'undefined' !== typeof console && console.error ) {
+			console.error( '[Image Pin Block] Outdated or missing plugin files: ' + OUTDATED_FILES.join( ', ' ) + '. Re-upload all plugin files and clear the cache.' );
+		}
+
+		// Editorでのみ、描画失敗を画面上に表示する(何も出ないまま原因が分からなくなるのを防ぐ)。
+		function setLoadNotice( hostEl, show ) {
+			var existing = hostEl.querySelector( '.ipb-load-notice' );
+			if ( ! show ) {
+				if ( existing && existing.parentNode ) {
+					existing.parentNode.removeChild( existing );
+				}
+				return;
+			}
+			if ( existing ) {
+				return;
+			}
+			var notice = ( hostEl.ownerDocument || document ).createElement( 'div' );
+			notice.className = 'ipb-load-notice';
+			notice.setAttribute( 'role', 'alert' );
+			notice.style.cssText = 'padding:8px 10px;font-size:12px;color:#8a1f11;background:#fbeaea;border:1px solid #d63638;';
+			notice.textContent = OUTDATED_FILES.length
+				? ( 'Image Pin Block: outdated plugin files detected (' + OUTDATED_FILES.join( ', ' ) + '). Re-upload all files and clear the cache.' )
+				: 'Image Pin Block: failed to render. See the browser console for details.';
+			hostEl.appendChild( notice );
+		}
+
 		function clampToRange( n, min, max ) {
 			return Math.min( max, Math.max( min, n ) );
 		}
@@ -382,12 +426,16 @@
 					resolvedScene.revision = myRevision;
 					renderer.setModel( resolvedScene );
 					renderer.setCamera( camera );
+					setLoadNotice( hostEl, false );
 				} ).catch( function( err ) {
 					// 失敗を握りつぶすと「ピンが全部消える」原因が追えないため、開発者向けに残す
 					// (asset読み込み失敗はresolveScene内で個別にnullへ丸められるため、ここへ来るのは
 					// 想定外の例外のみ)。
 					if ( 'undefined' !== typeof console && console.error ) {
 						console.error( '[Image Pin Block] scene pipeline failed:', err );
+					}
+					if ( renderState.editorOverlay && myRevision === revisionCounter ) {
+						setLoadNotice( hostEl, true );
 					}
 					// asset読み込み失敗等。次のsetAttributes()/setRenderState()で
 					// 再試行される(scene-assets.jsは失敗したURLをcacheへ残さないため)。

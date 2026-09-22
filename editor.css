@@ -11,6 +11,11 @@
 	position: relative;
 	display: block;
 	width: 100%;
+	/* Sceneの描画(SVG)が非同期で入るまでの間、枠が高さ0になって
+	   ブロックが消えたように見えないための最小限のフォールバック
+	   (画像サイズが分かっている場合はeditor.js側でaspect-ratioを
+	   インラインstyleとして設定し、これを上書きする)。*/
+	min-height: 120px;
 	cursor: zoom-in;
 }
 
