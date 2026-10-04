@@ -4,7 +4,7 @@ Tags: gutenberg, block, image, pin, hotspot
 Requires at least: TODO(要確認: 実テストしたWordPressの最小バージョンを確認してから設定してください)
 Tested up to: TODO(要確認: 実テストしたWordPressの最大バージョンを確認してから設定してください)
 Requires PHP: TODO(要確認: 実テストしたPHPの最小バージョンを確認してから設定してください)
-Stable tag: 0.3.1
+Stable tag: 0.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -61,6 +61,9 @@ PNG / JPEG に対応しています。SVGは対応していません。
 == Changelog ==
 
 詳細は同梱の `CHANGELOG.md` を参照してください。
+
+= 0.3.2 =
+* 「画像として保存」で、Fullscreen Editorのプレビューに開いている説明(ポップオーバー)も画像に含めるように変更(開いていなければ従来どおり含まれない)
 
 = 0.3.1 =
 * 新規ブロックに画像を初めて選択したとき、通常表示が空白のままになる問題を修正(今回の主な修正)

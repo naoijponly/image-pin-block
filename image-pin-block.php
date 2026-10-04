@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Image Pin Block
  * Description: A block that places pins on an image to show descriptions and jump to other parts of the page.
- * Version: 0.3.1
+ * Version: 0.3.2
  * Author: naoijponly
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -47,7 +47,7 @@ function image_pin_block_asset_version() {
 			$latest = $mtime;
 		}
 	}
-	$version = '0.3.1.' . $latest;
+	$version = '0.3.2.' . $latest;
 	return $version;
 }
 
