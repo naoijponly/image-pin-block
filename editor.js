@@ -1216,6 +1216,9 @@
 				return;
 			}
 			var fileName = buildExportFileName( attributes.imageUrl );
+			// 編集画面のPreviewで開いているPopover(説明)があれば、見たまま画像にも含める。
+			// 保存先ダイアログ表示中に状態が変わっても結果がぶれないよう、クリック時点の値を固定する。
+			var exportOptions = { ownerDocument: document, openPopoverPinId: openPopoverPinId };
 
 			// 利用者向け文言は変更しない。ただし現状の実装は失敗理由を問わずこの1文へ
 			// まとめてしまうため、開発者が実際の失敗段階(fetch失敗・CORS拒否・
@@ -1234,7 +1237,7 @@
 					suggestedName: fileName,
 					types: [ { description: 'PNG image', accept: { 'image/png': [ '.png' ] } } ]
 				} ).then( function( handle ) {
-					return PngExport.exportPng( attributes, { ownerDocument: document } ).then( function( blob ) {
+					return PngExport.exportPng( attributes, exportOptions ).then( function( blob ) {
 						return writeBlobToFileHandle( handle, blob );
 					} );
 				} ).catch( function( err ) {
@@ -1246,7 +1249,7 @@
 				return;
 			}
 
-			PngExport.exportPng( attributes, { ownerDocument: document } ).then( function( blob ) {
+			PngExport.exportPng( attributes, exportOptions ).then( function( blob ) {
 				triggerPngDownload( blob, fileName );
 			} ).catch( function( err ) {
 				reportGenerationError( err );

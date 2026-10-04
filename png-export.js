@@ -39,10 +39,10 @@
 		var SVG_NS = 'http://www.w3.org/2000/svg';
 		var XLINK_NS = 'http://www.w3.org/1999/xlink';
 
-		// Popover/選択/resize handle/focus ring/操作UI/Camera(letterbox・crop)/
+		// 選択/resize handle/focus ring/操作UI/Camera(letterbox・crop)/
 		// スクロール状態/Mobile Panel/未確定ColorPicker previewは、PNGに含めない
-		// (37節)。ResolvedScene自体はPopover OFFで作るため、popoverフィールドは
-		// 常にnull(resolveSceneへ渡すrenderStateで強制する)。
+		// (37節)。Popoverも既定では含めない(openPopoverPinId: null)。Editorが
+		// exportPng()のoptions.openPopoverPinIdを渡した場合だけ、そのピンの説明を含める。
 		var EXPORT_RENDER_STATE = {
 			selectedPinId: null,
 			openPopoverPinId: null,
@@ -81,7 +81,9 @@
 					}
 					return Object.assign( {}, pin, { visual: Object.assign( {}, pin.visual, { url: map[ pin.visual.url ] || pin.visual.url } ) } );
 				} );
-				return Object.assign( {}, resolvedScene, { image: embeddedImage, pins: embeddedPins, popover: null } );
+				// popoverはresolveScene()がrenderStateのopenPopoverPinIdから解決した結果をそのまま
+				// 引き継ぐ(既定ではEXPORT_RENDER_STATEがnullなので含まれない)。
+				return Object.assign( {}, resolvedScene, { image: embeddedImage, pins: embeddedPins } );
 			} );
 		}
 
@@ -158,7 +160,11 @@
 			var attributesSnapshot = JSON.parse( JSON.stringify( attributes ) );
 			var assetStore = SceneAssets.createAssetStore();
 
-			return SceneRuntime.resolveScene( attributesSnapshot, EXPORT_RENDER_STATE, { ownerDocument: ownerDocument, assetStore: assetStore } )
+			// options.openPopoverPinId(省略時null): 指定されたピンの説明(Popover)も画像に含める。
+			// 編集画面で開いているPopoverを「見たまま」保存したい場合にEditor Controllerが渡す。
+			// 他の編集専用要素(選択枠・リサイズハンドル等)は常に含めない。
+			var renderState = Object.assign( {}, EXPORT_RENDER_STATE, { openPopoverPinId: options.openPopoverPinId || null } );
+			return SceneRuntime.resolveScene( attributesSnapshot, renderState, { ownerDocument: ownerDocument, assetStore: assetStore } )
 				.then( function( resolvedScene ) {
 					if ( ! resolvedScene.image.url || resolvedScene.image.width <= 0 || resolvedScene.image.height <= 0 ) {
 						return Promise.reject( new Error( 'export-no-main-image' ) );
