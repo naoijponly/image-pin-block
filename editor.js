@@ -263,13 +263,26 @@
 			}
 			setDraft( String( next ) );
 			props.onCommit( next );
+			if ( props.onPreviewClear ) {
+				props.onPreviewClear();
+			}
 		}
 
 		return el( TextControl, {
 			label: props.label,
 			type: 'number',
 			value: draft,
-			onChange: function( value ) { setDraft( value ); },
+			onChange: function( value ) {
+				setDraft( value );
+				// 入力中の値を、保存はせずプレビューだけへ即時反映する(保存はblur/Enterの確定時。
+				// 未入力・数値でない途中状態はプレビューしない)。
+				if ( props.onPreview ) {
+					var n = parseFloat( value );
+					if ( ! isNaN( n ) ) {
+						props.onPreview( Math.min( props.max, Math.max( props.min, n ) ) );
+					}
+				}
+			},
 			onBlur: commit,
 			onKeyDown: function( evt ) {
 				if ( evt.key === 'Enter' ) {
@@ -469,6 +482,20 @@
 			} );
 		}
 
+		// 範囲(Shape)の数値・色を編集している間のプレビュー値({ id, fields })。
+		// 色のプレビュー(previewColors)と同じ考え方で、モーダル内Sceneの表示だけに反映し、
+		// 保存(setAttributes)はblur/Enter/「適用」の確定時に行う。
+		var shapePreviewState = useState( null );
+		var shapePreview = shapePreviewState[ 0 ];
+		var setShapePreview = shapePreviewState[ 1 ];
+		if ( shapePreview && shapePreview.id ) {
+			modalPreviewAttributes = Object.assign( {}, modalPreviewAttributes, {
+				shapes: ( attributes.shapes || [] ).map( function( sh ) {
+					return ( sh.id === shapePreview.id ) ? Object.assign( {}, sh, shapePreview.fields ) : sh;
+				} )
+			} );
+		}
+
 		var selectedState = useState( null );
 		var selectedPinId = selectedState[ 0 ];
 		var setSelectedPinId = selectedState[ 1 ];
@@ -599,6 +626,7 @@
 			setPendingMenu( null );
 			setSelectedPinId( null );
 			setOpenPopoverPinId( null );
+			setShapePreview( null );
 			setSelectedShapeId( shapeId );
 		}
 
@@ -1374,6 +1402,16 @@
 			}
 		}
 
+		function setShapeFieldPreview( fields ) {
+			if ( selectedShapeId ) {
+				setShapePreview( { id: selectedShapeId, fields: fields } );
+			}
+		}
+
+		function clearShapePreview() {
+			setShapePreview( null );
+		}
+
 		function updateSelectedShapeFields( fields ) {
 			updateShapes( shapes.map( function( sh ) {
 				return ( sh.id !== selectedShapeId ) ? sh : Object.assign( {}, sh, fields );
@@ -1738,6 +1776,7 @@
 			el(
 				'div',
 				{ className: 'image-pin-block-editor__pin-list-card' },
+				el( 'span', { className: 'image-pin-block-editor__list-label' }, __( 'Pins', 'image-pin-block' ) ),
 				el(
 					'div',
 					{ className: 'image-pin-block-editor__pin-tabs-scroll' },
@@ -1746,8 +1785,9 @@
 							Button,
 							{
 								key: pin.id,
-								variant: ( pin.id === selectedPinId ) ? 'primary' : 'secondary',
-								className: 'image-pin-block-editor__pin-tab',
+								variant: 'secondary',
+								className: 'image-pin-block-editor__pin-tab' + ( ( pin.id === selectedPinId ) ? ' is-selected' : '' ),
+								'aria-pressed': ( pin.id === selectedPinId ),
 								onClick: function() {
 									setPendingMenu( null );
 									setSelectedPinId( pin.id );
@@ -1775,6 +1815,7 @@
 			el(
 				'div',
 				{ className: 'image-pin-block-editor__pin-list-card image-pin-block-editor__shape-list-card' },
+				el( 'span', { className: 'image-pin-block-editor__list-label' }, __( 'Selection frames', 'image-pin-block' ) ),
 				el(
 					'div',
 					{ className: 'image-pin-block-editor__pin-tabs-scroll' },
@@ -1785,8 +1826,9 @@
 								Button,
 								{
 									key: shape.id,
-									variant: ( shape.id === selectedShapeId ) ? 'primary' : 'secondary',
-									className: 'image-pin-block-editor__pin-tab',
+									variant: 'secondary',
+									className: 'image-pin-block-editor__pin-tab' + ( ( shape.id === selectedShapeId ) ? ' is-selected' : '' ),
+									'aria-pressed': ( shape.id === selectedShapeId ),
 									onClick: function() { selectShape( shape.id ); }
 								},
 								( 'ellipse' === shape.type ? __( 'Ellipse', 'image-pin-block' ) : __( 'Rectangle', 'image-pin-block' ) ) + ' ' + ( index + 1 )
@@ -1818,6 +1860,8 @@
 					el( ColorInputRow, {
 						label: __( 'Frame color', 'image-pin-block' ),
 						value: selectedShape.strokeColor || SHAPE_DEFAULT_COLOR,
+						onPreview: function( color ) { setShapeFieldPreview( { strokeColor: color } ); },
+						onPreviewClear: clearShapePreview,
 						onCommit: function( color ) { updateSelectedShapeFields( { strokeColor: color || SHAPE_DEFAULT_COLOR } ); }
 					} ),
 					el( ClampedNumberControl, {
@@ -1827,6 +1871,8 @@
 						min: SHAPE_STROKE_WIDTH_MIN,
 						max: SHAPE_STROKE_WIDTH_MAX,
 						defaultValue: SHAPE_STROKE_WIDTH_DEFAULT,
+						onPreview: function( n ) { setShapeFieldPreview( { strokeWidth: n } ); },
+						onPreviewClear: clearShapePreview,
 						onCommit: function( n ) { updateSelectedShapeFields( { strokeWidth: n } ); }
 					} ),
 					el( SelectControl, {
@@ -1845,6 +1891,8 @@
 					el( ColorInputRow, {
 						label: __( 'Fill color', 'image-pin-block' ),
 						value: selectedShape.fillColor || SHAPE_DEFAULT_COLOR,
+						onPreview: function( color ) { setShapeFieldPreview( { fillColor: color } ); },
+						onPreviewClear: clearShapePreview,
 						onCommit: function( color ) { updateSelectedShapeFields( { fillColor: color || SHAPE_DEFAULT_COLOR } ); }
 					} ),
 					el( RangeControl, {
@@ -1866,6 +1914,8 @@
 							min: 0,
 							max: SHAPE_CORNER_RADIUS_MAX,
 							defaultValue: 0,
+							onPreview: function( n ) { setShapeFieldPreview( { cornerRadius: n } ); },
+							onPreviewClear: clearShapePreview,
 							onCommit: function( n ) { updateSelectedShapeFields( { cornerRadius: n } ); }
 						} )
 						: null,

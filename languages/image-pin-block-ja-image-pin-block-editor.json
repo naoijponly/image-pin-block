@@ -273,6 +273,12 @@
 			],
 			"Drag the frame to move it, and drag the handles to resize it.": [
 				"範囲をドラッグして移動、周囲のハンドルをドラッグしてサイズを変更できます。"
+			],
+			"Pins": [
+				"ピン"
+			],
+			"Selection frames": [
+				"選択範囲"
 			]
 		}
 	}

@@ -271,6 +271,43 @@
 	white-space: nowrap;
 }
 
+/* 一覧の行ラベル(ピン / 選択範囲)。 */
+.image-pin-block-editor__list-label {
+	flex: 0 0 auto;
+	min-width: 4.5em;
+	font-size: 12px;
+	font-weight: 600;
+	color: #50575e;
+}
+
+/* 選択対象(タブ)は、操作ボタン(追加・複製・削除)と見た目を分ける: タブは角の丸いチップ型で、
+   選択中は塗りつぶし(Canvas上の選択色と同じ青)。操作ボタンはWordPress標準の四角いボタンのまま。
+   WordPress標準のButtonスタイル(.components-button.is-secondary等)に負けないよう、
+   親クラスを足して詳細度を上げている。 */
+.image-pin-block-editor__pin-list-card .image-pin-block-editor__pin-tab.components-button {
+	border: 1px solid #b8bcc2;
+	border-radius: 999px;
+	background: #fff;
+	color: #1e1e1e;
+	box-shadow: none;
+	padding: 0 14px;
+	min-height: 28px;
+	height: 28px;
+}
+
+.image-pin-block-editor__pin-list-card .image-pin-block-editor__pin-tab.components-button:hover:not( :disabled ) {
+	background: #e8f1fb;
+	border-color: #1e88e5;
+	color: #0b4f8a;
+}
+
+.image-pin-block-editor__pin-list-card .image-pin-block-editor__pin-tab.components-button.is-selected {
+	background: #1e88e5;
+	border-color: #1e88e5;
+	color: #fff;
+	font-weight: 600;
+}
+
 .image-pin-block-editor__pin-tab-add {
 	flex: 0 0 auto;
 }
@@ -285,6 +322,12 @@
    ボタンが4つあるため、狭い幅では折り返す。 */
 .image-pin-block-editor__shape-list-card {
 	margin-top: 8px;
+	flex-wrap: wrap;
+}
+
+/* 幅が狭いときは、タブ一覧を1行目に広く取り、ボタンは次の行へ折り返す。 */
+.image-pin-block-editor__shape-list-card .image-pin-block-editor__pin-tabs-scroll {
+	flex: 1 1 220px;
 }
 
 .image-pin-block-editor__shape-list-card .image-pin-block-editor__pin-tab-actions {
