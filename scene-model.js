@@ -51,12 +51,17 @@
 			popoverBackgroundBase: '#ffffff',
 			markerScale: 100, markerScaleMin: 1, markerScaleMax: 500,
 			tailSize: 'medium',
+			shapeStrokeColor: '#e63946', shapeStrokeWidth: 6, shapeStrokeWidthMin: 0, shapeStrokeWidthMax: 100,
+			shapeFillColor: '#e63946', shapeFillOpacity: 0,
+			shapeCornerRadius: 0, shapeCornerRadiusMax: 50,
 			pcBehavior: 'hover-click',
 			mobileBehavior: 'tap-tap'
 		};
 
 		var STROKE_WIDTHS = [ 'none', 'thin', 'normal', 'thick' ];
 		var TAIL_SIZES = [ 'small', 'medium', 'large' ];
+		var SHAPE_TYPES = [ 'rect', 'ellipse' ];
+		var SHAPE_STROKE_STYLES = [ 'solid', 'dashed' ];
 		var STROKE_WIDTH_PX = { none: 0, thin: 1, normal: 2, thick: 3 };
 
 		function clampNumber( value, min, max, fallback ) {
@@ -100,6 +105,35 @@
 			};
 		}
 
+		// shapes[]の1件(選択範囲。四角・楕円)を、Scene Model用のエントリへ正規化する。
+		// 保存値は百分率(x/y=左上、w/h=幅・高さ)。natural座標へ変換するのはここ(と、
+		// その変換式を持つGeometry)だけで、Renderer/Runtimeは百分率を扱わない。
+		function buildShapeModel( shape, imageWidth, imageHeight, Geometry ) {
+			var rectPercent = Geometry.normalizeShapeRectPercent( { x: shape.x, y: shape.y, w: shape.w, h: shape.h } );
+			var rect = Geometry.computeShapeRect( imageWidth, imageHeight, rectPercent );
+			var type = resolveEnum( shape.type, SHAPE_TYPES, 'rect' );
+			var strokeWidth = clampNumber( shape.strokeWidth, DEFAULTS.shapeStrokeWidthMin, DEFAULTS.shapeStrokeWidthMax, DEFAULTS.shapeStrokeWidth );
+			var strokeStyle = resolveEnum( shape.strokeStyle, SHAPE_STROKE_STYLES, 'solid' );
+			var cornerRadius = ( 'rect' === type ) ? clampNumber( shape.cornerRadius, 0, DEFAULTS.shapeCornerRadiusMax, DEFAULTS.shapeCornerRadius ) : 0;
+			return {
+				id: shape.id,
+				type: type,
+				rectPercent: rectPercent,
+				x: rect.x,
+				y: rect.y,
+				width: rect.width,
+				height: rect.height,
+				strokeColor: shape.strokeColor || DEFAULTS.shapeStrokeColor,
+				strokeWidth: strokeWidth,
+				strokeStyle: strokeStyle,
+				dashArray: Geometry.computeShapeDashArray( strokeWidth, strokeStyle ),
+				fillColor: shape.fillColor || DEFAULTS.shapeFillColor,
+				fillOpacity: clampNumber( shape.fillOpacity, 0, 100, DEFAULTS.shapeFillOpacity ),
+				cornerRadius: cornerRadius,
+				cornerRadiusPx: cornerRadius / 100 * Math.min( rect.width, rect.height )
+			};
+		}
+
 		// attributes(ブロック保存属性)からSceneModelを組み立てる。Geometry引数は
 		// window.ImagePinBlockGeometry(またはrequireしたもの)を渡すこと
 		// (このモジュール自身はGeometryを直接requireせず、呼び出し側が注入する。
@@ -115,6 +149,12 @@
 				return buildPinModel( p, imageWidth, imageHeight, Geometry );
 			} );
 
+			var shapeModels = ( attributes.shapes || [] ).filter( function( sh ) {
+				return sh && sh.id;
+			} ).map( function( sh ) {
+				return buildShapeModel( sh, imageWidth, imageHeight, Geometry );
+			} );
+
 			var labelStrokeWidth = resolveEnum( attributes.labelStrokeWidth, STROKE_WIDTHS, DEFAULTS.labelStrokeWidth );
 			var popoverStrokeWidth = resolveEnum( attributes.popoverStrokeWidth, STROKE_WIDTHS, DEFAULTS.popoverStrokeWidth );
 
@@ -125,6 +165,7 @@
 					height: imageHeight
 				},
 				pins: pinModels,
+				shapes: shapeModels,
 				appearance: {
 					pin: {
 						size: clampNumber( attributes.pinSize, DEFAULTS.pinSizeMin, DEFAULTS.pinSizeMax, DEFAULTS.pinSize ),

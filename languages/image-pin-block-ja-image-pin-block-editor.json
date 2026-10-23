@@ -222,6 +222,57 @@
 			],
 			"Popover tail size": [
 				"ポップオーバーの吹き出し先端のサイズ"
+			],
+			"No selection frames yet.": [
+				"選択範囲はまだありません。"
+			],
+			"Rectangle": [
+				"四角"
+			],
+			"Ellipse": [
+				"楕円"
+			],
+			"Add rectangle": [
+				"四角を追加"
+			],
+			"Add ellipse": [
+				"楕円を追加"
+			],
+			"Duplicate frame": [
+				"範囲を複製"
+			],
+			"Delete this frame": [
+				"この範囲を削除"
+			],
+			"Selection frame settings": [
+				"選択範囲の設定"
+			],
+			"Frame color": [
+				"枠の色"
+			],
+			"Frame width (px, 0 = no frame)": [
+				"枠の太さ(px。0で枠なし)"
+			],
+			"Frame style": [
+				"枠の線の種類"
+			],
+			"Solid": [
+				"実線"
+			],
+			"Dashed": [
+				"破線"
+			],
+			"Fill color": [
+				"塗りの色"
+			],
+			"Fill opacity (0 = no fill)": [
+				"塗りの不透明度(0で塗りなし)"
+			],
+			"Corner roundness (%)": [
+				"角の丸み(%)"
+			],
+			"Drag the frame to move it, and drag the handles to resize it.": [
+				"範囲をドラッグして移動、周囲のハンドルをドラッグしてサイズを変更できます。"
 			]
 		}
 	}

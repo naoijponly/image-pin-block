@@ -113,6 +113,29 @@
 		return { width: hostWidth, height: hostWidth / aspectRatio };
 	}
 
+	function generateShapeId( shapes ) {
+		var existingIds = shapes.map( function( sh ) { return sh.id; } );
+		var n = shapes.length + 1;
+		var id = 'shape-' + n;
+		while ( existingIds.indexOf( id ) !== -1 ) {
+			n++;
+			id = 'shape-' + n;
+		}
+		return id;
+	}
+
+	// 選択範囲(Shape)の既定値。枠線の太さは画像幅に比例した初期値(ピンのサイズ等と同じ考え方)、
+	// 大きさは画像の中央に幅30%・高さ20%。範囲を追加するときは、選択中(無ければ最後)の範囲の
+	// 見た目(色・線・塗り)を引き継ぐ。
+	var SHAPE_DEFAULT_COLOR = '#e63946';
+	var SHAPE_DEFAULT_WIDTH_PERCENT = 30;
+	var SHAPE_DEFAULT_HEIGHT_PERCENT = 20;
+	var SHAPE_STROKE_WIDTH_AUTO_RATIO = 0.003;
+	var SHAPE_STROKE_WIDTH_DEFAULT = 6;
+	var SHAPE_STROKE_WIDTH_MIN = 0;
+	var SHAPE_STROKE_WIDTH_MAX = 100;
+	var SHAPE_CORNER_RADIUS_MAX = 50;
+
 	function generatePinId( pins ) {
 		var existingIds = pins.map( function( p ) { return p.id; } );
 		var n = pins.length + 1;
@@ -384,6 +407,7 @@
 		var attributes = props.attributes;
 		var setAttributes = props.setAttributes;
 		var pins = attributes.pins || [];
+		var shapes = attributes.shapes || [];
 
 		// Inspector表示専用の見た目設定(フォールバック込み)。Scene Runtimeへは渡さない
 		// (Runtime自身がscene-model.jsで同じフォールバックを独立に解決する。ここはUI表示用の
@@ -449,6 +473,12 @@
 		var selectedPinId = selectedState[ 0 ];
 		var setSelectedPinId = selectedState[ 1 ];
 
+		// 選択範囲(Shape)の選択状態。ピンの選択(selectedPinId)とは同時に持たない
+		// (どちらか一方を選ぶと他方は解除される。下のuseEffect・selectShape()参照)。
+		var selectedShapeState = useState( null );
+		var selectedShapeId = selectedShapeState[ 0 ];
+		var setSelectedShapeId = selectedShapeState[ 1 ];
+
 		var isModalOpenState = useState( false );
 		var isModalOpen = isModalOpenState[ 0 ];
 		var setIsModalOpen = isModalOpenState[ 1 ];
@@ -497,7 +527,9 @@
 		latestRef.current = {
 			pins: pins,
 			selectedPinId: selectedPinId,
+			selectedShapeId: selectedShapeId,
 			openPopoverPinId: openPopoverPinId,
+			shapes: shapes,
 			attributes: attributes
 		};
 
@@ -561,6 +593,75 @@
 			ro.observe( outerEl );
 			return function() { ro.disconnect(); };
 		}, [ isModalOpen ] );
+
+		// 範囲(Shape)を選択する(ピン・Popover・追加メニューの選択状態は解除する)。
+		function selectShape( shapeId ) {
+			setPendingMenu( null );
+			setSelectedPinId( null );
+			setOpenPopoverPinId( null );
+			setSelectedShapeId( shapeId );
+		}
+
+		// 範囲(Shape)本体のドラッグ移動、または8つのハンドルによるリサイズ。
+		// 移動・リサイズの制約(画像内に収める・最小サイズ)と百分率への変換は、すべて
+		// Geometry.dragShapeRectPercent()が担う(ここでは座標差分を渡して結果を保存するだけ)。
+		function handleShapePointerDown( rt, shapeId, handle, evt ) {
+			evt.stopPropagation();
+			evt.preventDefault();
+			selectShape( shapeId );
+
+			var model = rt.getSnapshot().model;
+			var shapeModel = model ? ( model.shapes || [] ).filter( function( sh ) { return sh.id === shapeId; } )[ 0 ] : null;
+			var startScene = rt.clientToScene( evt.clientX, evt.clientY );
+			if ( ! shapeModel || ! startScene ) {
+				return;
+			}
+			var imageWidth = model.image.width || 0;
+			var imageHeight = model.image.height || 0;
+			var startRect = shapeModel.rectPercent;
+
+			var pointerId = evt.pointerId;
+			var svgEl = rt.getRenderer().getSvgElement();
+			if ( svgEl.setPointerCapture ) {
+				svgEl.setPointerCapture( pointerId );
+			}
+
+			function handleMove( moveEvt ) {
+				if ( moveEvt.pointerId !== pointerId ) {
+					return;
+				}
+				moveEvt.stopPropagation();
+				var scenePt = rt.clientToScene( moveEvt.clientX, moveEvt.clientY );
+				if ( ! scenePt ) {
+					return;
+				}
+				var next = Geometry.dragShapeRectPercent( startRect, handle, scenePt.x - startScene.x, scenePt.y - startScene.y, imageWidth, imageHeight );
+				setAttributes( {
+					shapes: latestRef.current.shapes.map( function( sh ) {
+						return ( sh.id === shapeId ) ? Object.assign( {}, sh, { x: next.x, y: next.y, w: next.w, h: next.h } ) : sh;
+					} )
+				} );
+			}
+
+			function endDrag( endEvt ) {
+				if ( endEvt && endEvt.pointerId !== pointerId ) {
+					return;
+				}
+				if ( endEvt ) {
+					endEvt.stopPropagation();
+				}
+				if ( svgEl.hasPointerCapture && svgEl.hasPointerCapture( pointerId ) ) {
+					svgEl.releasePointerCapture( pointerId );
+				}
+				svgEl.removeEventListener( 'pointermove', handleMove );
+				svgEl.removeEventListener( 'pointerup', endDrag );
+				svgEl.removeEventListener( 'pointercancel', endDrag );
+			}
+
+			svgEl.addEventListener( 'pointermove', handleMove );
+			svgEl.addEventListener( 'pointerup', endDrag );
+			svgEl.addEventListener( 'pointercancel', endDrag );
+		}
 
 		// ドラッグ操作系(pointerdown→move→up)は、client座標→Scene(natural)座標の変換に
 		// すべて rt.clientToScene()(共通API。getScreenCTM().inverse()ベース)を使う。
@@ -884,6 +985,7 @@
 					return;
 				}
 				setSelectedPinId( null );
+				setSelectedShapeId( null );
 				setOpenPopoverPinId( null );
 			}
 
@@ -908,6 +1010,7 @@
 			var yPercent = clampPercent( ( scenePt.y / model.image.height ) * 100 );
 			var svgRect = rt.getRenderer().getSvgElement().getBoundingClientRect();
 			setSelectedPinId( null );
+			setSelectedShapeId( null );
 			setOpenPopoverPinId( null );
 			setPendingMenu( {
 				x: Math.round( xPercent * 10 ) / 10,
@@ -974,7 +1077,8 @@
 					onViewportDoubleClick: function( evt ) { handleViewportDoubleClick( rt, evt ); },
 					onViewportWheel: function( evt ) { handleViewportWheel( rt, evt ); },
 					onPopoverWheel: function( evt ) { handlePopoverWheel( rt, evt ); },
-					onPinKeyDown: function( pinId, evt ) { handlePinKeyDown( pinId, evt ); }
+					onPinKeyDown: function( pinId, evt ) { handlePinKeyDown( pinId, evt ); },
+					onShapePointerDown: function( shapeId, handle, evt ) { handleShapePointerDown( rt, shapeId, handle, evt ); }
 				}
 			} );
 			modalRuntimeRef.current = rt;
@@ -982,6 +1086,7 @@
 			rt.setAttributes( modalPreviewAttributes );
 			rt.setRenderState( {
 				selectedPinId: latestRef.current.selectedPinId,
+				selectedShapeId: latestRef.current.selectedShapeId,
 				openPopoverPinId: latestRef.current.openPopoverPinId,
 				editorOverlay: true
 			} );
@@ -1005,11 +1110,27 @@
 			if ( modalRuntimeRef.current ) {
 				modalRuntimeRef.current.setRenderState( {
 					selectedPinId: selectedPinId,
+					selectedShapeId: selectedShapeId,
 					openPopoverPinId: openPopoverPinId,
 					editorOverlay: true
 				} );
 			}
-		}, [ selectedPinId, openPopoverPinId ] );
+		}, [ selectedPinId, selectedShapeId, openPopoverPinId ] );
+
+		// ピンを選んだら範囲(Shape)の選択は解除する(ピンのクリック・タブ・追加・複製・
+		// キーボード操作のどの経路でも成立するよう、選択状態の変化そのものに反応させる)。
+		useEffect( function() {
+			if ( null !== selectedPinId ) {
+				setSelectedShapeId( null );
+			}
+		}, [ selectedPinId ] );
+
+		// 選択中の範囲が(Undo等で)存在しなくなった場合は選択を解除する。
+		useEffect( function() {
+			if ( null !== selectedShapeId && ! shapes.some( function( sh ) { return sh.id === selectedShapeId; } ) ) {
+				setSelectedShapeId( null );
+			}
+		}, [ shapes, selectedShapeId ] );
 
 		// 「全体を表示する」: Fit状態(Zoom=100%・中心=画像中心)へ戻す。
 		function resetToFit() {
@@ -1182,6 +1303,81 @@
 			var fields = {};
 			fields[ field ] = value;
 			updateSelectedPinFields( fields );
+		}
+
+		// ─── 範囲(Shape)の追加・複製・削除・編集 ───
+		var selectedShape = null;
+		shapes.forEach( function( sh ) {
+			if ( sh.id === selectedShapeId ) {
+				selectedShape = sh;
+			}
+		} );
+
+		function updateShapes( nextShapes ) {
+			setAttributes( { shapes: nextShapes } );
+		}
+
+		function addShape( type ) {
+			var base = selectedShape || shapes[ shapes.length - 1 ] || null;
+			var autoStrokeWidth = clampToRange( Math.round( ( attributes.imageWidth || 0 ) * SHAPE_STROKE_WIDTH_AUTO_RATIO ), 2, SHAPE_STROKE_WIDTH_MAX );
+			var offset = ( shapes.length % 5 ) * 3;
+			var rect = Geometry.normalizeShapeRectPercent( {
+				x: ( 100 - SHAPE_DEFAULT_WIDTH_PERCENT ) / 2 + offset,
+				y: ( 100 - SHAPE_DEFAULT_HEIGHT_PERCENT ) / 2 + offset,
+				w: SHAPE_DEFAULT_WIDTH_PERCENT,
+				h: SHAPE_DEFAULT_HEIGHT_PERCENT
+			} );
+			var newShape = {
+				id: generateShapeId( shapes ),
+				type: type,
+				x: rect.x,
+				y: rect.y,
+				w: rect.w,
+				h: rect.h,
+				strokeColor: base ? base.strokeColor : SHAPE_DEFAULT_COLOR,
+				strokeWidth: base ? base.strokeWidth : autoStrokeWidth,
+				strokeStyle: base ? base.strokeStyle : 'solid',
+				fillColor: base ? base.fillColor : SHAPE_DEFAULT_COLOR,
+				fillOpacity: base ? base.fillOpacity : 0,
+				cornerRadius: ( 'rect' === type && base ) ? ( base.cornerRadius || 0 ) : 0
+			};
+			updateShapes( shapes.concat( [ newShape ] ) );
+			selectShape( newShape.id );
+		}
+
+		function duplicateSelectedShape() {
+			if ( ! selectedShape ) {
+				return;
+			}
+			var rect = Geometry.normalizeShapeRectPercent( {
+				x: selectedShape.x + DUPLICATE_OFFSET_PERCENT,
+				y: selectedShape.y + DUPLICATE_OFFSET_PERCENT,
+				w: selectedShape.w,
+				h: selectedShape.h
+			} );
+			var copy = Object.assign( {}, selectedShape, { id: generateShapeId( shapes ), x: rect.x, y: rect.y, w: rect.w, h: rect.h } );
+			updateShapes( shapes.concat( [ copy ] ) );
+			selectShape( copy.id );
+		}
+
+		function removeSelectedShape() {
+			var index = shapes.indexOf( selectedShape );
+			if ( ! selectedShape || index === -1 ) {
+				return;
+			}
+			var nextShapes = shapes.filter( function( sh ) { return sh.id !== selectedShapeId; } );
+			updateShapes( nextShapes );
+			if ( nextShapes.length > 0 ) {
+				selectShape( nextShapes[ ( index < nextShapes.length ) ? index : nextShapes.length - 1 ].id );
+			} else {
+				setSelectedShapeId( null );
+			}
+		}
+
+		function updateSelectedShapeFields( fields ) {
+			updateShapes( shapes.map( function( sh ) {
+				return ( sh.id !== selectedShapeId ) ? sh : Object.assign( {}, sh, fields );
+			} ) );
 		}
 
 		function handleSelectMarkerImage( media ) {
@@ -1575,8 +1771,108 @@
 					el( Button, { variant: 'secondary', disabled: ! selectedPin, onClick: duplicateSelectedPin }, __( 'Duplicate pin', 'image-pin-block' ) ),
 					el( Button, { variant: 'secondary', isDestructive: true, disabled: ! selectedPin, onClick: removeSelectedPin }, __( 'Delete this pin', 'image-pin-block' ) )
 				)
+			),
+			el(
+				'div',
+				{ className: 'image-pin-block-editor__pin-list-card image-pin-block-editor__shape-list-card' },
+				el(
+					'div',
+					{ className: 'image-pin-block-editor__pin-tabs-scroll' },
+					shapes.length === 0
+						? el( 'span', { className: 'image-pin-block-editor__shape-empty' }, __( 'No selection frames yet.', 'image-pin-block' ) )
+						: shapes.map( function( shape, index ) {
+							return el(
+								Button,
+								{
+									key: shape.id,
+									variant: ( shape.id === selectedShapeId ) ? 'primary' : 'secondary',
+									className: 'image-pin-block-editor__pin-tab',
+									onClick: function() { selectShape( shape.id ); }
+								},
+								( 'ellipse' === shape.type ? __( 'Ellipse', 'image-pin-block' ) : __( 'Rectangle', 'image-pin-block' ) ) + ' ' + ( index + 1 )
+							);
+						} )
+				),
+				el(
+					'div',
+					{ className: 'image-pin-block-editor__pin-tab-actions' },
+					el( Button, { variant: 'secondary', onClick: function() { addShape( 'rect' ); } }, __( 'Add rectangle', 'image-pin-block' ) ),
+					el( Button, { variant: 'secondary', onClick: function() { addShape( 'ellipse' ); } }, __( 'Add ellipse', 'image-pin-block' ) ),
+					el( Button, { variant: 'secondary', disabled: ! selectedShape, onClick: duplicateSelectedShape }, __( 'Duplicate frame', 'image-pin-block' ) ),
+					el( Button, { variant: 'secondary', isDestructive: true, disabled: ! selectedShape, onClick: removeSelectedShape }, __( 'Delete this frame', 'image-pin-block' ) )
+				)
 			)
 		);
+
+		// 選択中の範囲(Shape)の設定(枠の色・太さ・線の種類 / 塗りの色・不透明度 / 角の丸み)。
+		// 色はカラーピッカーの「適用」で確定する(ライブプレビューは行わず、確定時に1回だけ保存する)。
+		var shapeSettingsGrid = null;
+		if ( selectedShape ) {
+			var shapeKey = selectedShape.id;
+			shapeSettingsGrid = el(
+				'div',
+				{ className: 'image-pin-block-editor__modal-individual-grid' },
+				el(
+					'div',
+					{ className: 'image-pin-block-editor__modal-individual-col' },
+					el( ColorInputRow, {
+						label: __( 'Frame color', 'image-pin-block' ),
+						value: selectedShape.strokeColor || SHAPE_DEFAULT_COLOR,
+						onCommit: function( color ) { updateSelectedShapeFields( { strokeColor: color || SHAPE_DEFAULT_COLOR } ); }
+					} ),
+					el( ClampedNumberControl, {
+						key: shapeKey + ':sw:' + selectedShape.strokeWidth,
+						label: __( 'Frame width (px, 0 = no frame)', 'image-pin-block' ),
+						value: ( 'number' === typeof selectedShape.strokeWidth ) ? selectedShape.strokeWidth : SHAPE_STROKE_WIDTH_DEFAULT,
+						min: SHAPE_STROKE_WIDTH_MIN,
+						max: SHAPE_STROKE_WIDTH_MAX,
+						defaultValue: SHAPE_STROKE_WIDTH_DEFAULT,
+						onCommit: function( n ) { updateSelectedShapeFields( { strokeWidth: n } ); }
+					} ),
+					el( SelectControl, {
+						label: __( 'Frame style', 'image-pin-block' ),
+						value: ( 'dashed' === selectedShape.strokeStyle ) ? 'dashed' : 'solid',
+						options: [
+							{ value: 'solid', label: __( 'Solid', 'image-pin-block' ) },
+							{ value: 'dashed', label: __( 'Dashed', 'image-pin-block' ) }
+						],
+						onChange: function( value ) { updateSelectedShapeFields( { strokeStyle: value } ); }
+					} )
+				),
+				el(
+					'div',
+					{ className: 'image-pin-block-editor__modal-individual-col' },
+					el( ColorInputRow, {
+						label: __( 'Fill color', 'image-pin-block' ),
+						value: selectedShape.fillColor || SHAPE_DEFAULT_COLOR,
+						onCommit: function( color ) { updateSelectedShapeFields( { fillColor: color || SHAPE_DEFAULT_COLOR } ); }
+					} ),
+					el( RangeControl, {
+						label: __( 'Fill opacity (0 = no fill)', 'image-pin-block' ),
+						value: ( 'number' === typeof selectedShape.fillOpacity ) ? selectedShape.fillOpacity : 0,
+						min: 0,
+						max: 100,
+						onChange: function( value ) { updateSelectedShapeFields( { fillOpacity: ( 'number' === typeof value ) ? value : 0 } ); }
+					} )
+				),
+				el(
+					'div',
+					{ className: 'image-pin-block-editor__modal-individual-col' },
+					( 'rect' === selectedShape.type )
+						? el( ClampedNumberControl, {
+							key: shapeKey + ':cr:' + ( selectedShape.cornerRadius || 0 ),
+							label: __( 'Corner roundness (%)', 'image-pin-block' ),
+							value: selectedShape.cornerRadius || 0,
+							min: 0,
+							max: SHAPE_CORNER_RADIUS_MAX,
+							defaultValue: 0,
+							onCommit: function( n ) { updateSelectedShapeFields( { cornerRadius: n } ); }
+						} )
+						: null,
+					el( 'p', { className: 'image-pin-block-editor__shape-hint' }, __( 'Drag the frame to move it, and drag the handles to resize it.', 'image-pin-block' ) )
+				)
+			);
+		}
 
 		var isLabelInputDisabled = !! ( selectedPin && selectedPin.markerImageUrl && selectedPin.showLabel === false );
 		var modalLeftBottom = el(
@@ -1585,8 +1881,10 @@
 			el(
 				'div',
 				{ className: 'image-pin-block-editor__individual-card' },
-				el( 'p', { className: 'image-pin-block-editor__individual-card-heading' }, __( 'Pin content', 'image-pin-block' ) ),
-				selectedPin
+				el( 'p', { className: 'image-pin-block-editor__individual-card-heading' }, selectedShape ? __( 'Selection frame settings', 'image-pin-block' ) : __( 'Pin content', 'image-pin-block' ) ),
+				selectedShape
+					? shapeSettingsGrid
+					: selectedPin
 					? el(
 						'div',
 						{ className: 'image-pin-block-editor__modal-individual-grid' },
@@ -1785,7 +2083,8 @@
 			popoverSpeechBubble: { type: 'boolean', default: false },
 			labelTailSize: { type: 'string', default: 'medium' },
 			popoverTailSize: { type: 'string', default: 'medium' },
-			pins: { type: 'array', default: [] }
+			pins: { type: 'array', default: [] },
+			shapes: { type: 'array', default: [] }
 		},
 		edit: Edit,
 		save: function() { return null; }

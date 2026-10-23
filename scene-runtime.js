@@ -50,7 +50,7 @@
 		// 描画が黙って止まる。読み込み時に必要な関数の有無を確認し、足りなければ原因が分かる
 		// メッセージをConsoleへ出す(キャッシュ・反映漏れの検出用)。
 		var REQUIRED_API = [
-			[ 'geometry.js', Geometry, [ 'resolveTailDimensions', 'buildSpeechBubblePolygon', 'computePopoverPlacement' ] ],
+			[ 'geometry.js', Geometry, [ 'resolveTailDimensions', 'buildSpeechBubblePolygon', 'computePopoverPlacement', 'computeShapeRect', 'dragShapeRectPercent' ] ],
 			[ 'scene-model.js', SceneModel, [ 'buildSceneModel' ] ],
 			[ 'scene-assets.js', SceneAssets, [ 'createAssetStore', 'normalizeUrl' ] ],
 			[ 'scene-text.js', SceneText, [ 'layoutText' ] ],
@@ -384,6 +384,15 @@
 
 					return {
 						image: { url: Model.image.url, width: imageWidth, height: imageHeight },
+						// 選択範囲(Shape)はAsset解決・文字計測が要らないため、Modelの正規化済み値に
+						// Editor用の寸法(ハンドルの大きさ・当たり判定の線幅。いずれも画像幅比)だけを
+						// 足して、そのままRendererへ渡す。
+						shapes: Model.shapes.map( function( shape ) {
+							return Object.assign( {}, shape, {
+								handleSize: Geometry.computeShapeHandleSize( imageWidth ),
+								hitWidth: Geometry.computeShapeHitWidth( imageWidth, shape.strokeWidth )
+							} );
+						} ),
 						pins: resolvedPins,
 						popover: popover
 					};

@@ -281,6 +281,29 @@
 	gap: 8px;
 }
 
+/* 選択範囲(Shape)の一覧カード。ピン一覧カードと同じ見た目で、すぐ下に並べる。
+   ボタンが4つあるため、狭い幅では折り返す。 */
+.image-pin-block-editor__shape-list-card {
+	margin-top: 8px;
+}
+
+.image-pin-block-editor__shape-list-card .image-pin-block-editor__pin-tab-actions {
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.image-pin-block-editor__shape-empty {
+	align-self: center;
+	color: #757575;
+	font-size: 12px;
+}
+
+.image-pin-block-editor__shape-hint {
+	margin: 8px 0 0;
+	color: #757575;
+	font-size: 12px;
+}
+
 /* 個別設定全体を囲む外側カード(「ピンの内容」)。ピン一覧カード(pin-list-card)と
    統一した見た目にする。中身の3カラム自体はこのカードの中で横並びのまま
    (縦積みへは変更しない)。選択の有無に関わらず常に同じ構造(見出し+中身)。 */

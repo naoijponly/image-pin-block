@@ -260,9 +260,10 @@ function image_pin_block_render_callback( $attributes, $content ) {
 	$image_width  = isset( $attributes['imageWidth'] ) ? absint( $attributes['imageWidth'] ) : 0;
 	$image_height = isset( $attributes['imageHeight'] ) ? absint( $attributes['imageHeight'] ) : 0;
 
-	$pins_raw = ( isset( $attributes['pins'] ) && is_array( $attributes['pins'] ) ) ? $attributes['pins'] : array();
+	$pins_raw   = ( isset( $attributes['pins'] ) && is_array( $attributes['pins'] ) ) ? $attributes['pins'] : array();
+	$shapes_raw = ( isset( $attributes['shapes'] ) && is_array( $attributes['shapes'] ) ) ? $attributes['shapes'] : array();
 
-	if ( '' === $image_url || empty( $pins_raw ) ) {
+	if ( '' === $image_url || ( empty( $pins_raw ) && empty( $shapes_raw ) ) ) {
 		return '';
 	}
 
@@ -394,7 +395,56 @@ function image_pin_block_render_callback( $attributes, $content ) {
 		);
 	}
 
-	if ( empty( $pins ) ) {
+	// 選択範囲(Shape。四角・楕円)。ピンとは独立した装飾図形。座標・サイズは画像に対する
+	// 百分率(scene-model.js/geometry.jsと同じ範囲・最小サイズ・fallback。editor.jsの
+	// 保存値を直接編集された場合でも壊れないよう、PHP側でも独立してクランプ・検証する)。
+	$shape_min_size = 2;
+	$shapes         = array();
+	foreach ( $shapes_raw as $shape ) {
+		if ( ! is_array( $shape ) || empty( $shape['id'] ) || ! is_string( $shape['id'] ) ) {
+			continue;
+		}
+		$shape_id = sanitize_html_class( $shape['id'] );
+		if ( '' === $shape_id ) {
+			continue;
+		}
+		$shape_type = ( isset( $shape['type'] ) && 'ellipse' === $shape['type'] ) ? 'ellipse' : 'rect';
+		$shape_w    = max( $shape_min_size, min( 100, ( isset( $shape['w'] ) && is_numeric( $shape['w'] ) ) ? (float) $shape['w'] : $shape_min_size ) );
+		$shape_h    = max( $shape_min_size, min( 100, ( isset( $shape['h'] ) && is_numeric( $shape['h'] ) ) ? (float) $shape['h'] : $shape_min_size ) );
+		$shape_x    = max( 0, min( 100 - $shape_w, ( isset( $shape['x'] ) && is_numeric( $shape['x'] ) ) ? (float) $shape['x'] : 0 ) );
+		$shape_y    = max( 0, min( 100 - $shape_h, ( isset( $shape['y'] ) && is_numeric( $shape['y'] ) ) ? (float) $shape['y'] : 0 ) );
+
+		$shape_stroke_width = ( isset( $shape['strokeWidth'] ) && is_numeric( $shape['strokeWidth'] )
+			&& (float) $shape['strokeWidth'] >= 0 && (float) $shape['strokeWidth'] <= 100 )
+			? (float) $shape['strokeWidth']
+			: 6;
+		$shape_stroke_style = ( isset( $shape['strokeStyle'] ) && 'dashed' === $shape['strokeStyle'] ) ? 'dashed' : 'solid';
+		$shape_fill_opacity = ( isset( $shape['fillOpacity'] ) && is_numeric( $shape['fillOpacity'] )
+			&& (float) $shape['fillOpacity'] >= 0 && (float) $shape['fillOpacity'] <= 100 )
+			? (float) $shape['fillOpacity']
+			: 0;
+		$shape_corner       = ( isset( $shape['cornerRadius'] ) && is_numeric( $shape['cornerRadius'] )
+			&& (float) $shape['cornerRadius'] >= 0 && (float) $shape['cornerRadius'] <= 50 )
+			? (float) $shape['cornerRadius']
+			: 0;
+
+		$shapes[] = array(
+			'id'           => $shape_id,
+			'type'         => $shape_type,
+			'x'            => round( $shape_x, 1 ),
+			'y'            => round( $shape_y, 1 ),
+			'w'            => round( $shape_w, 1 ),
+			'h'            => round( $shape_h, 1 ),
+			'strokeColor'  => image_pin_block_sanitize_color( isset( $shape['strokeColor'] ) ? $shape['strokeColor'] : '', '#e63946' ),
+			'strokeWidth'  => $shape_stroke_width,
+			'strokeStyle'  => $shape_stroke_style,
+			'fillColor'    => image_pin_block_sanitize_color( isset( $shape['fillColor'] ) ? $shape['fillColor'] : '', '#e63946' ),
+			'fillOpacity'  => $shape_fill_opacity,
+			'cornerRadius' => ( 'rect' === $shape_type ) ? $shape_corner : 0,
+		);
+	}
+
+	if ( empty( $pins ) && empty( $shapes ) ) {
 		return '';
 	}
 
@@ -423,6 +473,7 @@ function image_pin_block_render_callback( $attributes, $content ) {
 		'labelTailSize'           => $label_tail_size,
 		'popoverTailSize'         => $popover_tail_size,
 		'pins'                    => $pins,
+		'shapes'                  => $shapes,
 	);
 
 	$payload_json = wp_json_encode( $payload );
