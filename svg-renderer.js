@@ -19,6 +19,8 @@
  * ─── Resolved Sceneの形(scene-runtime.jsが組み立てて渡す) ───
  * {
  *   image: { url, width, height },
+ *   shapes: [ { id, type: 'rect'|'ellipse', x, y, width, height, strokeColor, strokeWidth,
+ *     dashArray, fillColor, fillOpacity(0-100), cornerRadiusPx, handleSize, hitWidth } ],
  *   pins: [ {
  *     id, cx, cy, hasMarker,
  *     visual: { kind: 'dot', diameter, color } | { kind: 'marker', url, width, height },
@@ -38,7 +40,7 @@
  *   }
  * }
  *
- * RenderState: { selectedPinId, openPopoverPinId, editorOverlay(bool),
+ * RenderState: { selectedPinId, selectedShapeId, openPopoverPinId, editorOverlay(bool),
  *   focusedPinId, popoverScrollOffset }
  */
 ( function( root, factory ) {
@@ -371,6 +373,93 @@
 		}
 
 		// ─── createScene: 唯一の公開API ───
+		// ─── 選択範囲(Shape。四角・楕円)のDOMノード(keyed。setModel()のたびに作り直さず
+		// 既存ノードの属性だけを更新する) ───
+		// visualEl: 見た目(枠線・塗り)。常にpointer-events:none。
+		// hitEl: Editorでの当たり判定専用の透明な図形。見た目の枠線より細くならない線幅を持つ
+		// (細い枠線でも掴めるようにする)。Frontend/Lightbox/PNGではpointer-events:noneのまま。
+		function createShapeEntry( shapeId ) {
+			var group = ns( 'g' );
+			group.setAttribute( 'data-shape-id', shapeId );
+			group.setAttribute( 'class', 'ipb-shape' );
+			group.setAttribute( 'aria-hidden', 'true' );
+			return { shapeId: shapeId, group: group, type: null, visualEl: null, hitEl: null };
+		}
+
+		function updateShape( entry, shape, editorOverlay, isSelected ) {
+			if ( entry.type !== shape.type ) {
+				while ( entry.group.firstChild ) {
+					entry.group.removeChild( entry.group.firstChild );
+				}
+				var tag = ( 'ellipse' === shape.type ) ? 'ellipse' : 'rect';
+				entry.visualEl = ns( tag );
+				entry.visualEl.setAttribute( 'class', 'ipb-shape-visual' );
+				entry.hitEl = ns( tag );
+				entry.hitEl.setAttribute( 'class', 'ipb-shape-hit' );
+				entry.group.appendChild( entry.visualEl );
+				entry.group.appendChild( entry.hitEl );
+				entry.type = shape.type;
+			}
+			var geometryAttrs = ( 'ellipse' === shape.type )
+				? { cx: shape.x + shape.width / 2, cy: shape.y + shape.height / 2, rx: shape.width / 2, ry: shape.height / 2 }
+				: { x: shape.x, y: shape.y, width: shape.width, height: shape.height, rx: shape.cornerRadiusPx, ry: shape.cornerRadiusPx };
+			var hasFill = shape.fillOpacity > 0;
+			var hasStroke = shape.strokeWidth > 0;
+			setAttrs( entry.visualEl, Object.assign( {}, geometryAttrs, {
+				fill: hasFill ? shape.fillColor : 'none',
+				'fill-opacity': hasFill ? shape.fillOpacity / 100 : undefined,
+				stroke: hasStroke ? shape.strokeColor : 'none',
+				'stroke-width': hasStroke ? shape.strokeWidth : undefined,
+				'stroke-dasharray': shape.dashArray || undefined
+			} ) );
+			entry.visualEl.style.pointerEvents = 'none';
+			setAttrs( entry.hitEl, Object.assign( {}, geometryAttrs, {
+				fill: 'none',
+				stroke: 'transparent',
+				'stroke-width': shape.hitWidth
+			} ) );
+			// 未選択の枠だけの図形は枠線上だけ、塗りのある図形・選択中の図形は内側も掴める
+			// (内側が空の図形で全面をpointer-events:allにすると、図形の内側でのダブルクリックによる
+			// ピン追加・背景クリックによる選択解除ができなくなるため)。
+			entry.hitEl.style.pointerEvents = editorOverlay ? ( ( isSelected || hasFill ) ? 'all' : 'stroke' ) : 'none';
+			entry.hitEl.style.cursor = editorOverlay ? 'move' : '';
+		}
+
+		var SHAPE_HANDLE_CURSORS = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize' };
+
+		// 選択中の図形の外枠とリサイズハンドル(8つ)。Editor限定(overlayLayerへ描く)。
+		function appendShapeSelection( layer, shape ) {
+			var hs = shape.handleSize;
+			var outline = ns( 'rect' );
+			setAttrs( outline, {
+				x: shape.x, y: shape.y, width: shape.width, height: shape.height,
+				fill: 'none', stroke: '#1e88e5', 'stroke-width': Math.max( 1, hs / 6 ),
+				'stroke-dasharray': ( hs * 0.8 ) + ' ' + ( hs * 0.5 ),
+				'pointer-events': 'none', 'class': 'ipb-shape-selection'
+			} );
+			layer.appendChild( outline );
+			var x = shape.x;
+			var y = shape.y;
+			var w = shape.width;
+			var h = shape.height;
+			var centers = {
+				nw: [ x, y ], n: [ x + w / 2, y ], ne: [ x + w, y ], e: [ x + w, y + h / 2 ],
+				se: [ x + w, y + h ], s: [ x + w / 2, y + h ], sw: [ x, y + h ], w: [ x, y + h / 2 ]
+			};
+			( ( Geometry && Geometry.SHAPE_HANDLES ) || [] ).forEach( function( name ) {
+				var handle = ns( 'rect' );
+				setAttrs( handle, {
+					x: centers[ name ][ 0 ] - hs / 2, y: centers[ name ][ 1 ] - hs / 2, width: hs, height: hs,
+					fill: '#ffffff', stroke: '#1e88e5', 'stroke-width': Math.max( 1, hs / 8 ),
+					'data-shape-id': shape.id, 'data-shape-handle': name, 'class': 'ipb-shape-handle'
+				} );
+				handle.style.cursor = SHAPE_HANDLE_CURSORS[ name ];
+				handle.style.pointerEvents = 'all';
+				handle.style.touchAction = 'none';
+				layer.appendChild( handle );
+			} );
+		}
+
 		function createScene( hostEl, options ) {
 			options = options || {};
 			var doc = hostEl.ownerDocument || document;
@@ -404,6 +493,8 @@
 			mainImageEl.setAttribute( 'preserveAspectRatio', 'none' );
 			mainImageLayer.appendChild( mainImageEl );
 
+			var shapesLayer = ns( 'g' );
+			shapesLayer.setAttribute( 'data-layer', 'shapes' );
 			var pinsLayer = ns( 'g' );
 			pinsLayer.setAttribute( 'data-layer', 'pins' );
 			var labelsLayer = ns( 'g' );
@@ -415,6 +506,7 @@
 
 			svg.appendChild( defs );
 			svg.appendChild( mainImageLayer );
+			svg.appendChild( shapesLayer );
 			svg.appendChild( pinsLayer );
 			svg.appendChild( labelsLayer );
 			svg.appendChild( popoverLayer );
@@ -445,9 +537,10 @@
 			}
 
 			var pinEntries = {}; // pinId -> entry
+			var shapeEntries = {}; // shapeId -> entry
 			var currentModel = null;
 			var currentCamera = null;
-			var currentRenderState = { selectedPinId: null, openPopoverPinId: null, editorOverlay: false, focusedPinId: null, popoverScrollOffset: 0 };
+			var currentRenderState = { selectedPinId: null, selectedShapeId: null, openPopoverPinId: null, editorOverlay: false, focusedPinId: null, popoverScrollOffset: 0 };
 			// scene-runtime.jsのrevision-gated pipelineが「このFrameはrevision Nの
 			// 結果である」と分かるよう、setModel()に渡すResolvedSceneへ付けてもらう
 			// 任意のrevision番号(付けなければ常に0のまま)。ready(N)は、
@@ -495,6 +588,11 @@
 						options.onPinPointerDown( pinId, evt );
 						return;
 					}
+				}
+				var shapeTarget = ( evt.target && evt.target.closest ) ? evt.target.closest( '[data-shape-id]' ) : null;
+				if ( shapeTarget && options.onShapePointerDown ) {
+					options.onShapePointerDown( shapeTarget.getAttribute( 'data-shape-id' ), shapeTarget.getAttribute( 'data-shape-handle' ) || 'body', evt );
+					return;
 				}
 				if ( isWithin( evt, '[data-role="popover"]' ) ) {
 					return; // Popover自身の上のpointerdownは背景操作として扱わない。
@@ -696,6 +794,11 @@
 				if ( ! renderState.editorOverlay ) {
 					return;
 				}
+				( model.shapes || [] ).forEach( function( shape ) {
+					if ( renderState.selectedShapeId === shape.id ) {
+						appendShapeSelection( overlayLayer, shape );
+					}
+				} );
 				model.pins.forEach( function( pin ) {
 					var isSelected = ( renderState.selectedPinId === pin.id );
 					var isFocused = ( renderState.focusedPinId === pin.id );
@@ -733,6 +836,24 @@
 						// リセットしてしまわないよう、ここでは絶対にviewBoxへ触れない
 						// (初期表示・Zoom/Pan変更の反映は、必ずcontroller.setViewBox()側で行う)。
 					}
+					var seenShapeIds = {};
+					( resolvedScene.shapes || [] ).forEach( function( shape ) {
+						seenShapeIds[ shape.id ] = true;
+						if ( ! shapeEntries[ shape.id ] ) {
+							shapeEntries[ shape.id ] = createShapeEntry( shape.id );
+							shapesLayer.appendChild( shapeEntries[ shape.id ].group );
+						}
+						updateShape( shapeEntries[ shape.id ], shape, !! currentRenderState.editorOverlay, currentRenderState.selectedShapeId === shape.id );
+					} );
+					Object.keys( shapeEntries ).forEach( function( shapeId ) {
+						if ( ! seenShapeIds[ shapeId ] ) {
+							var shapeEntry = shapeEntries[ shapeId ];
+							if ( shapeEntry.group.parentNode ) {
+								shapeEntry.group.parentNode.removeChild( shapeEntry.group );
+							}
+							delete shapeEntries[ shapeId ];
+						}
+					} );
 					var seenIds = {};
 					resolvedScene.pins.forEach( function( pin ) {
 						seenIds[ pin.id ] = true;
@@ -836,6 +957,7 @@
 						svg.parentNode.removeChild( svg );
 					}
 					pinEntries = {};
+					shapeEntries = {};
 				}
 			};
 

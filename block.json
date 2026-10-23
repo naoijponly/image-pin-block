@@ -31,6 +31,7 @@
 		"popoverSpeechBubble": { "type": "boolean", "default": false },
 		"labelTailSize": { "type": "string", "default": "medium" },
 		"popoverTailSize": { "type": "string", "default": "medium" },
-		"pins": { "type": "array", "default": [] }
+		"pins": { "type": "array", "default": [] },
+		"shapes": { "type": "array", "default": [] }
 	}
 }

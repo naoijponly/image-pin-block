@@ -276,4 +276,75 @@ describe( 'geometry.js: resolveTailDimensions(吹き出し先端の大・中・�
 	} );
 } );
 
+describe( 'geometry.js: 選択範囲(Shape)の純粋関数', function() {
+	var rect = { x: 10, y: 10, w: 20, h: 20 };
+
+	it( 'normalizeShapeRectPercent: 範囲外・最小サイズ未満・非数値を画像内の有効な矩形へ収める', function() {
+		assert.deepStrictEqual( Geometry.normalizeShapeRectPercent( { x: 95, y: -5, w: 30, h: 1 } ), { x: 70, y: 0, w: 30, h: 2 } );
+		assert.deepStrictEqual( Geometry.normalizeShapeRectPercent( { x: 'a', y: null, w: undefined, h: NaN } ), { x: 0, y: 0, w: 2, h: 2 } );
+		assert.deepStrictEqual( Geometry.normalizeShapeRectPercent( { x: 0, y: 0, w: 500, h: 500 } ), { x: 0, y: 0, w: 100, h: 100 } );
+		assert.deepStrictEqual( Geometry.normalizeShapeRectPercent( null ), { x: 0, y: 0, w: 2, h: 2 } );
+	} );
+
+	it( 'computeShapeRect: 百分率をnatural座標へ変換する(ピンのx/yと同じ「画像に対する%」)', function() {
+		assert.deepStrictEqual( Geometry.computeShapeRect( 1000, 500, { x: 10, y: 20, w: 30, h: 40 } ), { x: 100, y: 100, width: 300, height: 200 } );
+	} );
+
+	it( 'dragShapeRectPercent(body): 移動しても大きさは変わらず、画像の外へ出ない', function() {
+		var moved = Geometry.dragShapeRectPercent( rect, 'body', 100, 50, 1000, 500 );
+		assert.deepStrictEqual( moved, { x: 20, y: 20, w: 20, h: 20 } );
+		var clampedRight = Geometry.dragShapeRectPercent( rect, 'body', 99999, -99999, 1000, 500 );
+		assert.deepStrictEqual( clampedRight, { x: 80, y: 0, w: 20, h: 20 } );
+	} );
+
+	it( 'dragShapeRectPercent(se/e/s): 右下・右辺・下辺だけが動き、左上は固定される', function() {
+		assert.deepStrictEqual( Geometry.dragShapeRectPercent( rect, 'se', 100, 50, 1000, 500 ), { x: 10, y: 10, w: 30, h: 30 } );
+		assert.deepStrictEqual( Geometry.dragShapeRectPercent( rect, 'e', 100, 50, 1000, 500 ), { x: 10, y: 10, w: 30, h: 20 } );
+		assert.deepStrictEqual( Geometry.dragShapeRectPercent( rect, 's', 100, 50, 1000, 500 ), { x: 10, y: 10, w: 20, h: 30 } );
+	} );
+
+	it( 'dragShapeRectPercent(nw/n/w): 左上・上辺・左辺が動き、右下は固定される', function() {
+		assert.deepStrictEqual( Geometry.dragShapeRectPercent( rect, 'nw', -50, -25, 1000, 500 ), { x: 5, y: 5, w: 25, h: 25 } );
+		assert.deepStrictEqual( Geometry.dragShapeRectPercent( rect, 'n', -50, -25, 1000, 500 ), { x: 10, y: 5, w: 20, h: 25 } );
+		assert.deepStrictEqual( Geometry.dragShapeRectPercent( rect, 'w', -50, -25, 1000, 500 ), { x: 5, y: 10, w: 25, h: 20 } );
+	} );
+
+	it( 'dragShapeRectPercent: 反対側の辺を越えて縮めても最小サイズで止まり、反転しない', function() {
+		var shrunk = Geometry.dragShapeRectPercent( rect, 'se', -99999, -99999, 1000, 500 );
+		assert.deepStrictEqual( shrunk, { x: 10, y: 10, w: Geometry.SHAPE_MIN_SIZE_PERCENT, h: Geometry.SHAPE_MIN_SIZE_PERCENT } );
+		var shrunkNw = Geometry.dragShapeRectPercent( rect, 'nw', 99999, 99999, 1000, 500 );
+		assert.strictEqual( shrunkNw.x + shrunkNw.w, 30 );
+		assert.strictEqual( shrunkNw.w, Geometry.SHAPE_MIN_SIZE_PERCENT );
+	} );
+
+	it( 'dragShapeRectPercent: ハンドルで画像の外へ広げても100%を超えない', function() {
+		var grown = Geometry.dragShapeRectPercent( rect, 'se', 99999, 99999, 1000, 500 );
+		assert.strictEqual( grown.x + grown.w, 100 );
+		assert.strictEqual( grown.y + grown.h, 100 );
+	} );
+
+	it( 'dragShapeRectPercent: 画像サイズが0でも例外を投げず、開始時の矩形のまま返す', function() {
+		assert.deepStrictEqual( Geometry.dragShapeRectPercent( rect, 'body', 100, 100, 0, 0 ), rect );
+	} );
+
+	it( 'computeShapeDashArray: 破線は線幅に比例し、実線・不明な値はnull', function() {
+		assert.strictEqual( Geometry.computeShapeDashArray( 10, 'dashed' ), '20 15' );
+		assert.strictEqual( Geometry.computeShapeDashArray( 1, 'dashed' ), '8 6' );
+		assert.strictEqual( Geometry.computeShapeDashArray( 10, 'solid' ), null );
+		assert.strictEqual( Geometry.computeShapeDashArray( 10, 'dotted' ), null );
+	} );
+
+	it( 'ハンドルの大きさ・当たり判定の線幅は画像幅に比例し、上下限・枠線の太さを下回らない', function() {
+		assert.strictEqual( Geometry.computeShapeHandleSize( 100 ), 8 );
+		assert.strictEqual( Geometry.computeShapeHandleSize( 100000 ), 28 );
+		assert.ok( Geometry.computeShapeHandleSize( 1000 ) > 8 && Geometry.computeShapeHandleSize( 1000 ) < 28 );
+		assert.strictEqual( Geometry.computeShapeHitWidth( 1000, 2 ), 15 );
+		assert.strictEqual( Geometry.computeShapeHitWidth( 1000, 40 ), 40 );
+	} );
+
+	it( 'SHAPE_HANDLES: 4辺・4隅の8つ', function() {
+		assert.deepStrictEqual( Geometry.SHAPE_HANDLES.slice().sort(), [ 'e', 'n', 'ne', 'nw', 's', 'se', 'sw', 'w' ] );
+	} );
+} );
+
 module.exports = helper.summary( 'geometry.test.js' );

@@ -470,6 +470,99 @@
 			return { left: left, top: top };
 		}
 
+		// ─── 選択範囲(Shape。四角・楕円。ピンとは独立した装飾図形) ───
+		// 保存値は画像に対する百分率(x/y=左上、w/h=幅・高さ。ピンのx/yと同じ考え方)。
+		// 百分率⇄natural座標の変換と、移動・リサイズ時の制約(画像内に収める・最小サイズ)は
+		// ここでしか行わない(Editor Controller・scene-model.jsはこの純粋関数だけを呼ぶ)。
+		var SHAPE_MIN_SIZE_PERCENT = 2;
+		var SHAPE_HANDLE_RATIO = 0.012; // ハンドル1辺の大きさ(画像幅に対する割合)
+		var SHAPE_HANDLE_MIN = 8;
+		var SHAPE_HANDLE_MAX = 28;
+		var SHAPE_HIT_WIDTH_RATIO = 0.015; // 枠線が細くても掴めるよう、当たり判定用の線幅の下限(画像幅に対する割合)
+		var SHAPE_HANDLES = [ 'nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w' ];
+
+		function roundTenth( n ) {
+			return Math.round( n * 10 ) / 10;
+		}
+
+		function finiteOr( value, fallback ) {
+			return ( 'number' === typeof value && isFinite( value ) ) ? value : fallback;
+		}
+
+		// 百分率の矩形を、0〜100の範囲内・最小サイズ以上へ正規化する(小数第1位)。
+		function normalizeShapeRectPercent( rect ) {
+			var r = rect || {};
+			var w = clampToRange( roundTenth( finiteOr( r.w, SHAPE_MIN_SIZE_PERCENT ) ), SHAPE_MIN_SIZE_PERCENT, 100 );
+			var h = clampToRange( roundTenth( finiteOr( r.h, SHAPE_MIN_SIZE_PERCENT ) ), SHAPE_MIN_SIZE_PERCENT, 100 );
+			var x = clampToRange( roundTenth( finiteOr( r.x, 0 ) ), 0, 100 - w );
+			var y = clampToRange( roundTenth( finiteOr( r.y, 0 ) ), 0, 100 - h );
+			return { x: x, y: y, w: w, h: h };
+		}
+
+		// 百分率の矩形 → natural座標の矩形。
+		function computeShapeRect( imageWidth, imageHeight, rectPercent ) {
+			var p = normalizeShapeRectPercent( rectPercent );
+			return {
+				x: p.x / 100 * imageWidth,
+				y: p.y / 100 * imageHeight,
+				width: p.w / 100 * imageWidth,
+				height: p.h / 100 * imageHeight
+			};
+		}
+
+		// 開始時の矩形(百分率)を、ハンドル(またはbody=移動)と、natural座標でのポインタ移動量
+		// (dxNatural/dyNatural)から更新した矩形(百分率)を返す。
+		// handle: 'body'(移動)または SHAPE_HANDLES のいずれか(辺・角のリサイズ)。
+		function dragShapeRectPercent( startRectPercent, handle, dxNatural, dyNatural, imageWidth, imageHeight ) {
+			var start = normalizeShapeRectPercent( startRectPercent );
+			var dx = ( imageWidth > 0 ) ? dxNatural / imageWidth * 100 : 0;
+			var dy = ( imageHeight > 0 ) ? dyNatural / imageHeight * 100 : 0;
+			if ( 'body' === handle ) {
+				return normalizeShapeRectPercent( {
+					x: clampToRange( start.x + dx, 0, 100 - start.w ),
+					y: clampToRange( start.y + dy, 0, 100 - start.h ),
+					w: start.w,
+					h: start.h
+				} );
+			}
+			var left = start.x;
+			var top = start.y;
+			var right = start.x + start.w;
+			var bottom = start.y + start.h;
+			if ( handle.indexOf( 'w' ) !== -1 ) {
+				left = clampToRange( left + dx, 0, right - SHAPE_MIN_SIZE_PERCENT );
+			}
+			if ( handle.indexOf( 'e' ) !== -1 ) {
+				right = clampToRange( right + dx, left + SHAPE_MIN_SIZE_PERCENT, 100 );
+			}
+			if ( handle.indexOf( 'n' ) !== -1 ) {
+				top = clampToRange( top + dy, 0, bottom - SHAPE_MIN_SIZE_PERCENT );
+			}
+			if ( handle.indexOf( 's' ) !== -1 ) {
+				bottom = clampToRange( bottom + dy, top + SHAPE_MIN_SIZE_PERCENT, 100 );
+			}
+			return normalizeShapeRectPercent( { x: left, y: top, w: right - left, h: bottom - top } );
+		}
+
+		// 破線のstroke-dasharray(natural単位。線が太いほど破線も大きくする)。実線はnull。
+		function computeShapeDashArray( strokeWidth, strokeStyle ) {
+			if ( 'dashed' !== strokeStyle ) {
+				return null;
+			}
+			var unit = Math.max( 4, finiteOr( strokeWidth, 0 ) );
+			return ( unit * 2 ) + ' ' + ( unit * 1.5 );
+		}
+
+		// 選択ハンドルの1辺(natural単位)。
+		function computeShapeHandleSize( imageWidth ) {
+			return clampToRange( imageWidth * SHAPE_HANDLE_RATIO, SHAPE_HANDLE_MIN, SHAPE_HANDLE_MAX );
+		}
+
+		// Editorでの当たり判定用の線幅(natural単位)。見た目の枠線より細くならない。
+		function computeShapeHitWidth( imageWidth, strokeWidth ) {
+			return Math.max( finiteOr( strokeWidth, 0 ), imageWidth * SHAPE_HIT_WIDTH_RATIO );
+		}
+
 		return {
 			// 定数(値そのものが必要な呼び出し側 - 例: inline styleのpadding計算 - 用)。
 			LABEL_GAP: LABEL_GAP,
@@ -528,7 +621,15 @@
 			computeTailPlacement: computeTailPlacement,
 			buildSpeechBubblePolygon: buildSpeechBubblePolygon,
 			computePopoverVerticalMetrics: computePopoverVerticalMetrics,
-			computePopoverPlacement: computePopoverPlacement
+			computePopoverPlacement: computePopoverPlacement,
+			SHAPE_MIN_SIZE_PERCENT: SHAPE_MIN_SIZE_PERCENT,
+			SHAPE_HANDLES: SHAPE_HANDLES,
+			normalizeShapeRectPercent: normalizeShapeRectPercent,
+			computeShapeRect: computeShapeRect,
+			dragShapeRectPercent: dragShapeRectPercent,
+			computeShapeDashArray: computeShapeDashArray,
+			computeShapeHandleSize: computeShapeHandleSize,
+			computeShapeHitWidth: computeShapeHitWidth
 		};
 	}
 );

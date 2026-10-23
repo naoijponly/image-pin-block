@@ -113,4 +113,77 @@ describe( 'scene-model.js: buildSceneModel — 吹き出し先端サイズ(label
 	} );
 } );
 
+describe( 'scene-model.js: buildSceneModel — 選択範囲(shapes)', function() {
+	it( 'shapes未設定(既存記事)は空配列で、他の出力に影響しない', function() {
+		var model = SceneModel.buildSceneModel( baseAttributes(), Geometry );
+		assert.deepStrictEqual( model.shapes, [] );
+	} );
+
+	it( '百分率の矩形をnatural座標へ変換し、百分率もrectPercentとして保持する', function() {
+		var model = SceneModel.buildSceneModel( baseAttributes( {
+			shapes: [ { id: 's1', type: 'rect', x: 10, y: 20, w: 50, h: 25 } ]
+		} ), Geometry );
+		var shape = model.shapes[ 0 ];
+		assert.strictEqual( shape.x, 80 );
+		assert.strictEqual( shape.y, 120 );
+		assert.strictEqual( shape.width, 400 );
+		assert.strictEqual( shape.height, 150 );
+		assert.deepStrictEqual( shape.rectPercent, { x: 10, y: 20, w: 50, h: 25 } );
+	} );
+
+	it( '未設定の見た目は既定値(赤い実線・塗りなし・角丸なし)になる', function() {
+		var shape = SceneModel.buildSceneModel( baseAttributes( { shapes: [ { id: 's1', x: 0, y: 0, w: 10, h: 10 } ] } ), Geometry ).shapes[ 0 ];
+		assert.strictEqual( shape.type, 'rect' );
+		assert.strictEqual( shape.strokeColor, '#e63946' );
+		assert.strictEqual( shape.strokeWidth, 6 );
+		assert.strictEqual( shape.strokeStyle, 'solid' );
+		assert.strictEqual( shape.dashArray, null );
+		assert.strictEqual( shape.fillOpacity, 0 );
+		assert.strictEqual( shape.cornerRadius, 0 );
+	} );
+
+	it( '破線・塗り・角丸の指定が反映される(角丸は短辺に対する%をnatural pxへ)', function() {
+		var shape = SceneModel.buildSceneModel( baseAttributes( {
+			shapes: [ { id: 's1', type: 'rect', x: 0, y: 0, w: 50, h: 25, strokeWidth: 4, strokeStyle: 'dashed', fillColor: '#00ff00', fillOpacity: 40, cornerRadius: 20 } ]
+		} ), Geometry ).shapes[ 0 ];
+		assert.strictEqual( shape.dashArray, '8 6' );
+		assert.strictEqual( shape.fillColor, '#00ff00' );
+		assert.strictEqual( shape.fillOpacity, 40 );
+		assert.strictEqual( shape.cornerRadiusPx, 30 ); // 短辺(高さ150) × 20%
+	} );
+
+	it( '楕円には角丸が適用されない', function() {
+		var shape = SceneModel.buildSceneModel( baseAttributes( {
+			shapes: [ { id: 's1', type: 'ellipse', x: 0, y: 0, w: 50, h: 25, cornerRadius: 30 } ]
+		} ), Geometry ).shapes[ 0 ];
+		assert.strictEqual( shape.type, 'ellipse' );
+		assert.strictEqual( shape.cornerRadiusPx, 0 );
+	} );
+
+	it( '不正な値(範囲外・未知の種類)は既定値へフォールバックし、idの無い要素は除外する', function() {
+		var model = SceneModel.buildSceneModel( baseAttributes( {
+			shapes: [
+				{ id: 's1', type: 'star', x: 0, y: 0, w: 10, h: 10, strokeWidth: 9999, strokeStyle: 'wavy', fillOpacity: -1, cornerRadius: 99 },
+				{ x: 1, y: 1, w: 5, h: 5 },
+				null
+			]
+		} ), Geometry );
+		assert.strictEqual( model.shapes.length, 1 );
+		var shape = model.shapes[ 0 ];
+		assert.strictEqual( shape.type, 'rect' );
+		assert.strictEqual( shape.strokeWidth, 6 );
+		assert.strictEqual( shape.strokeStyle, 'solid' );
+		assert.strictEqual( shape.fillOpacity, 0 );
+		assert.strictEqual( shape.cornerRadius, 0 );
+	} );
+
+	it( 'strokeWidth 0(枠なし。塗りだけのハイライト)は有効な値として保持される', function() {
+		var shape = SceneModel.buildSceneModel( baseAttributes( {
+			shapes: [ { id: 's1', x: 0, y: 0, w: 10, h: 10, strokeWidth: 0, fillOpacity: 30 } ]
+		} ), Geometry ).shapes[ 0 ];
+		assert.strictEqual( shape.strokeWidth, 0 );
+		assert.strictEqual( shape.fillOpacity, 30 );
+	} );
+} );
+
 module.exports = helper.summary( 'scene-model.test.js' );
